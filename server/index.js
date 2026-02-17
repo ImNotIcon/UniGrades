@@ -33,7 +33,6 @@ const ACADEMIC_IVIEW_URL = 'https://progress.upatras.gr/irj/servlet/prt/portal/p
 const CAPTCHA_IMG_SELECTORS = 'img[src*="zups_piq_st_acad_work_ov"], img[id*="captcha"], img[src*="captcha"]';
 
 const BROWSER_LAUNCH_OPTIONS = {
-    executablePath: '/usr/bin/google-chrome',
     args: [
         '--no-sandbox', '--disable-setuid-sandbox', '--disable-web-security',
         '--window-size=1920,1080', '--disable-background-timer-throttling',
@@ -41,6 +40,10 @@ const BROWSER_LAUNCH_OPTIONS = {
     ],
     protocolTimeout: 240000
 };
+
+if (process.env.BROWSER_PATH) {
+    BROWSER_LAUNCH_OPTIONS.executablePath = process.env.BROWSER_PATH;
+}
 
 // --- Utility Helpers ---
 
