@@ -11,6 +11,7 @@ export interface Grade {
     title: string;
     grade: string;
     year: string;
+    session?: string;
     ects: string;
     status: string;
     category?: string;

@@ -8,41 +8,118 @@ import type { Grade, StudentInfo } from './types';
 
 const API_URL = import.meta.env.VITE_API_URL || `http://${window.location.hostname}:3001/api`;
 
+const getOrCreateDeviceId = () => {
+  const existing = localStorage.getItem('up_device_id');
+  if (existing) return existing;
+
+  let nextId = '';
+  if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+    nextId = window.crypto.randomUUID();
+  } else {
+    nextId = `dev-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  }
+
+  localStorage.setItem('up_device_id', nextId);
+  return nextId;
+};
+
+const detectDeviceModel = () => {
+  const ua = navigator.userAgent || '';
+
+  let os = 'Unknown OS';
+  if (/Android/i.test(ua)) os = 'Android';
+  else if (/iPhone|iPad|iPod/i.test(ua)) os = 'iOS';
+  else if (/Windows/i.test(ua)) os = 'Windows';
+  else if (/Mac OS X|Macintosh/i.test(ua)) os = 'macOS';
+  else if (/Linux/i.test(ua)) os = 'Linux';
+
+  let browser = 'Browser';
+  if (/Edg\//i.test(ua)) browser = 'Edge';
+  else if (/Chrome\//i.test(ua) && !/Edg\//i.test(ua)) browser = 'Chrome';
+  else if (/Firefox\//i.test(ua)) browser = 'Firefox';
+  else if (/Safari\//i.test(ua) && !/Chrome\//i.test(ua)) browser = 'Safari';
+
+  return `${browser} on ${os}`;
+};
+
+const gradeKey = (g: Grade) => `${g.code}-${g.year}-${g.semester}-${g.session || g.acadSession || ''}`;
 
 const App: React.FC = () => {
+  const deviceId = useMemo(() => getOrCreateDeviceId(), []);
+  const deviceModel = useMemo(() => detectDeviceModel(), []);
+
+  const [features, setFeatures] = useState({
+    loaded: false,
+    mongoEnabled: false,
+    pushEnabled: false,
+    vapidAvailable: false,
+  });
+
+  const [autoSolveEnabled, setAutoSolveEnabledState] = useState(() => {
+    const stored = localStorage.getItem('up_auto_solve_enabled');
+    return stored !== 'false';
+  });
+
+  const [activeUsername, setActiveUsername] = useState(() => localStorage.getItem('up_user') || '');
+  const [sessionPasswordBase64, setSessionPasswordBase64] = useState<string | null>(() => localStorage.getItem('up_pass'));
+
   const [token, setToken] = useState<string | null>(null);
   const [captchaImage, setCaptchaImage] = useState<string | null>(null);
   const [captchaMessage, setCaptchaMessage] = useState<string | undefined>(undefined);
   const [selectedCourseCode, setSelectedCourseCode] = useState<string | null>(null);
   const [animateOut, setAnimateOut] = useState(false);
 
-  // Initialize state directly from local storage to prevent flash of login screen
   const [grades, setGrades] = useState<Grade[]>(() => {
     const saved = localStorage.getItem('up_grades');
     return saved ? JSON.parse(saved) : [];
   });
+
   const [studentInfo, setStudentInfo] = useState<StudentInfo | null>(() => {
     const saved = localStorage.getItem('up_studentInfo');
     return saved ? JSON.parse(saved) : null;
   });
+
   const [hasCredentials, setHasCredentials] = useState(() => {
     return !!(localStorage.getItem('up_user') && localStorage.getItem('up_pass'));
   });
 
-  const authAttempted = React.useRef(false);
+  const authAttempted = useRef(false);
   const isProgrammaticBack = useRef(false);
 
+  const [darkMode, setDarkMode] = useState(() => {
+    const stored = localStorage.getItem('theme');
+    if (stored === 'dark') return true;
+    if (stored === 'light') return false;
+    if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) return true;
+    return false;
+  });
 
+  const [loading, setLoading] = useState(false);
+  const [backgroundLoading, setBackgroundLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [isAutoLoggingIn, setIsAutoLoggingIn] = useState(false);
+
+  const setAutoSolveEnabled = (value: boolean) => {
+    setAutoSolveEnabledState(value);
+    localStorage.setItem('up_auto_solve_enabled', value ? 'true' : 'false');
+  };
+
+  const getPasswordBase64 = () => localStorage.getItem('up_pass') || sessionPasswordBase64;
+
+  const toggleTheme = () => {
+    const next = !darkMode;
+    setDarkMode(next);
+    localStorage.setItem('theme', next ? 'dark' : 'light');
+  };
 
   const handleSelectCourse = React.useCallback((code: string | null) => {
     if (selectedCourseCode === code) return;
-    if (code) {
-      // Clear notification for this course
-      const updatedGrades = grades.map(g =>
-        g.code === code ? { ...g, isNew: false } : g
-      );
 
-      // Only update if something changed to avoid unnecessary re-renders
+    if (code) {
+      const updatedGrades = grades.map(g => (
+        g.code === code ? { ...g, isNew: false } : g
+      ));
+
       if (updatedGrades.some((g, i) => g.isNew !== grades[i].isNew)) {
         setGrades(updatedGrades);
         localStorage.setItem('up_grades', JSON.stringify(updatedGrades));
@@ -75,19 +152,6 @@ const App: React.FC = () => {
     return () => window.removeEventListener('popstate', onPopState);
   }, []);
 
-  // Theme State — only persist when the user explicitly toggles
-  const [darkMode, setDarkMode] = useState(() => {
-    // Check local storage first (user has explicitly chosen)
-    const stored = localStorage.getItem('theme');
-    if (stored === 'dark') return true;
-    if (stored === 'light') return false;
-
-    // No stored preference — follow OS default (don't store it)
-    if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) return true;
-
-    return false; // Default to light
-  });
-
   useEffect(() => {
     if (darkMode) {
       document.documentElement.classList.add('dark');
@@ -98,27 +162,80 @@ const App: React.FC = () => {
     }
   }, [darkMode]);
 
-  const toggleTheme = () => {
-    const next = !darkMode;
-    setDarkMode(next);
-    // Only persist once the user has explicitly toggled
-    localStorage.setItem('theme', next ? 'dark' : 'light');
-  };
-
-  const [loading, setLoading] = useState(false);
-  const [backgroundLoading, setBackgroundLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [isAutoLoggingIn, setIsAutoLoggingIn] = useState(false);
-
-  // Auto-dismiss error
   useEffect(() => {
     if (error) {
-      const timer = setTimeout(() => setError(null), 5000);
+      const timer = setTimeout(() => setError(null), 3000);
       return () => clearTimeout(timer);
     }
   }, [error]);
 
-  // On mount: if we have stored credentials, auto-login and refresh grades
+  useEffect(() => {
+    let mounted = true;
+    axios.get(`${API_URL}/features`)
+      .then(res => {
+        if (!mounted) return;
+        setFeatures({
+          loaded: true,
+          mongoEnabled: !!res.data?.mongoEnabled,
+          pushEnabled: !!res.data?.pushEnabled,
+          vapidAvailable: !!res.data?.vapidAvailable,
+        });
+      })
+      .catch(() => {
+        if (!mounted) return;
+        setFeatures({ loaded: true, mongoEnabled: false, pushEnabled: false, vapidAvailable: false });
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!features.mongoEnabled) return;
+
+    const sendAppOpen = async (countOnlineOpen: boolean) => {
+      const username = activeUsername || localStorage.getItem('up_user') || '';
+      if (!username) return;
+
+      if (!navigator.onLine) {
+        if (countOnlineOpen) {
+          const offline = parseInt(localStorage.getItem('up_offline_opens') || '0', 10) || 0;
+          localStorage.setItem('up_offline_opens', String(offline + 1));
+        }
+        return;
+      }
+
+      const offlineOpenDelta = parseInt(localStorage.getItem('up_offline_opens') || '0', 10) || 0;
+      try {
+        await axios.post(`${API_URL}/statistics/app-open`, {
+          username,
+          deviceId,
+          deviceModel,
+          offlineOpenDelta,
+          countOnlineOpen,
+        });
+
+        if (offlineOpenDelta > 0) {
+          localStorage.setItem('up_offline_opens', '0');
+        }
+      } catch {
+        // no-op
+      }
+    };
+
+    sendAppOpen(true);
+
+    const onOnline = async () => {
+      const offlineOpenDelta = parseInt(localStorage.getItem('up_offline_opens') || '0', 10) || 0;
+      if (offlineOpenDelta <= 0) return;
+      await sendAppOpen(false);
+    };
+
+    window.addEventListener('online', onOnline);
+    return () => window.removeEventListener('online', onOnline);
+  }, [features.mongoEnabled, activeUsername, deviceId, deviceModel]);
+
   useEffect(() => {
     if (authAttempted.current) return;
     authAttempted.current = true;
@@ -128,19 +245,20 @@ const App: React.FC = () => {
     const storedCookies = localStorage.getItem('up_session_cookies');
 
     if (storedUser && storedPass) {
+      setActiveUsername(storedUser);
+      setSessionPasswordBase64(storedPass);
+      setHasCredentials(true);
       setIsAutoLoggingIn(true);
 
-      // If we have cookies, try refreshing grades directly (skip login)
       if (storedCookies) {
         refreshGrades(true);
       } else {
-        // No cookies yet, need to login first
-        handleLogin({ username: storedUser, pass: atob(storedPass), isAuto: true, isBackground: true });
+        handleLogin({ username: storedUser, pass: atob(storedPass), isAuto: true, isBackground: true, remember: true });
       }
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  /* Polling logic for async scraping and captcha. */
   const pollStatus = async (pollToken: string) => {
     const interval = setInterval(async () => {
       try {
@@ -148,9 +266,11 @@ const App: React.FC = () => {
 
         if (res.data.status === 'completed') {
           clearInterval(interval);
+
           if (res.data.cookies) {
             localStorage.setItem('up_session_cookies', JSON.stringify(res.data.cookies));
           }
+
           processAndSetData(res.data.grades || [], res.data.studentInfo, res.data.headers);
           setLoading(false);
           setBackgroundLoading(false);
@@ -175,8 +295,7 @@ const App: React.FC = () => {
           setIsAutoLoggingIn(false);
           setError('Session expired.');
         }
-      } catch (e) {
-        console.error('Polling error', e);
+      } catch {
         clearInterval(interval);
         setLoading(false);
         setBackgroundLoading(false);
@@ -184,56 +303,125 @@ const App: React.FC = () => {
     }, 2500);
   };
 
-  // Login: only authenticates, returns cookies. Then triggers grade refresh.
-  const handleLogin = async ({ username, pass, isAuto = false, isBackground = false, remember = false }: { username: string; pass: string; isAuto?: boolean, isBackground?: boolean, remember?: boolean }) => {
+  const sendLogoutToServer = async (usernameOverride?: string) => {
+    const username = usernameOverride || activeUsername || localStorage.getItem('up_user') || '';
+    if (!username) return;
+
+    try {
+      await axios.post(`${API_URL}/logout`, { username, deviceId });
+    } catch {
+      // no-op
+    }
+  };
+
+  const clearLocalSession = () => {
+    setToken(null);
+    setGrades([]);
+    setStudentInfo(null);
+    setActiveUsername('');
+    setSessionPasswordBase64(null);
+    setIsAutoLoggingIn(false);
+    setHasCredentials(false);
+    setLoading(false);
+    setBackgroundLoading(false);
+
+    localStorage.removeItem('up_grades');
+    localStorage.removeItem('up_studentInfo');
+    localStorage.removeItem('up_user');
+    localStorage.removeItem('up_pass');
+    localStorage.removeItem('up_session_cookies');
+    localStorage.removeItem('push_enabled');
+  };
+
+  const handleLogout = async () => {
+    await sendLogoutToServer();
+
+    try {
+      const registration = await navigator.serviceWorker?.ready;
+      const subscription = await registration?.pushManager?.getSubscription();
+      if (subscription) await subscription.unsubscribe();
+    } catch {
+      // no-op
+    }
+
+    clearLocalSession();
+  };
+
+  const handleLogin = async ({
+    username,
+    pass,
+    isAuto = false,
+    isBackground = false,
+    remember = false,
+  }: {
+    username: string;
+    pass: string;
+    isAuto?: boolean;
+    isBackground?: boolean;
+    remember?: boolean;
+  }) => {
     if (isBackground) {
       setBackgroundLoading(true);
     } else {
       setLoading(true);
     }
+
     setError(null);
     setCaptchaMessage(undefined);
 
     try {
-      const res = await axios.post(`${API_URL}/login`, { username, password: pass });
+      const res = await axios.post(`${API_URL}/login`, {
+        username,
+        password: pass,
+        deviceId,
+        deviceModel,
+      });
 
       if (res.data.success) {
         setHasCredentials(true);
+        setActiveUsername(username);
 
-        // Save credentials only after successful login
+        const passBase64 = btoa(pass);
+        setSessionPasswordBase64(passBase64);
+
         if (remember) {
           localStorage.setItem('up_user', username);
-          localStorage.setItem('up_pass', btoa(pass));
+          localStorage.setItem('up_pass', passBase64);
+        } else {
+          localStorage.removeItem('up_user');
+          localStorage.removeItem('up_pass');
         }
 
-        // Store cookies from login
         if (res.data.cookies) {
           localStorage.setItem('up_session_cookies', JSON.stringify(res.data.cookies));
         }
 
-        if (!isBackground) setLoading(false);
-        else setBackgroundLoading(false);
+        setLoading(false);
+        setBackgroundLoading(false);
 
-        // After login, always refresh as background since we're now on the Dashboard
         refreshGrades(true);
       }
-    } catch (err: any) {
-      console.error(err);
-      const errorMsg = err.response?.data?.error || 'Login failed. Please check credentials.';
+    } catch (err: unknown) {
+      const httpErr = err as { response?: { data?: { error?: string }; status?: number } };
+      const errorMsg = httpErr.response?.data?.error || 'Login failed. Please check credentials.';
 
-      // If credentials are definitively invalid, force logout/reset
-      if (err.response?.status === 401 && (
+      if (httpErr.response?.status === 401 && (
         errorMsg.includes('Wrong password') ||
         errorMsg.includes('Unknown username') ||
         errorMsg.includes('Invalid credentials')
       )) {
+        await sendLogoutToServer(username);
+
         localStorage.removeItem('up_user');
         localStorage.removeItem('up_pass');
         localStorage.removeItem('up_session_cookies');
         setHasCredentials(false);
+        setActiveUsername('');
+        setSessionPasswordBase64(null);
         setToken(null);
-        setError(errorMsg); // Show why they were kicked out
-      } else if (!isAuto) {
+      }
+
+      if (!isAuto) {
         setError(errorMsg);
       }
 
@@ -253,19 +441,17 @@ const App: React.FC = () => {
     }
   };
 
-  // Refresh Grades: uses stored cookies to fetch grades
   const refreshGrades = async (isBackground = false) => {
     if (loading || backgroundLoading) return;
 
     const storedCookies = localStorage.getItem('up_session_cookies');
     if (!storedCookies) {
-      // No cookies, need to login first
       const storedUser = localStorage.getItem('up_user');
       const storedPass = localStorage.getItem('up_pass');
       if (storedUser && storedPass) {
-        return handleLogin({ username: storedUser, pass: atob(storedPass), isAuto: true, isBackground });
+        return handleLogin({ username: storedUser, pass: atob(storedPass), isAuto: true, isBackground, remember: true });
       }
-      handleLogout();
+      await handleLogout();
       setError('No session cookies. Please login first.');
       return;
     }
@@ -278,30 +464,33 @@ const App: React.FC = () => {
     setError(null);
 
     try {
+      const username = activeUsername || localStorage.getItem('up_user') || '';
       const res = await axios.post(`${API_URL}/refresh-grades`, {
-        cookies: JSON.parse(storedCookies)
+        cookies: JSON.parse(storedCookies),
+        username,
+        deviceId,
+        deviceModel,
+        autoSolveEnabled,
       });
 
       if (res.data.token) {
         setToken(res.data.token);
         pollStatus(res.data.token);
       }
-    } catch (err: any) {
-      console.error(err);
-
-      // If session expired, re-login automatically
-      if (err.response?.status === 401 && err.response?.data?.expired) {
-        console.log('Session expired, re-logging in...');
+    } catch (err: unknown) {
+      const httpErr = err as { response?: { data?: { error?: string; expired?: boolean }; status?: number } };
+      if (httpErr.response?.status === 401 && httpErr.response?.data?.expired) {
         const storedUser = localStorage.getItem('up_user');
         const storedPass = localStorage.getItem('up_pass');
+
         if (storedUser && storedPass) {
           localStorage.removeItem('up_session_cookies');
-          return handleLogin({ username: storedUser, pass: atob(storedPass), isAuto: true, isBackground });
-        } else {
-          handleLogout();
-          setError('Session expired. Please login again.');
-          return;
+          return handleLogin({ username: storedUser, pass: atob(storedPass), isAuto: true, isBackground, remember: true });
         }
+
+        await handleLogout();
+        setError('Session expired. Please login again.');
+        return;
       }
 
       if (!navigator.onLine) {
@@ -311,8 +500,9 @@ const App: React.FC = () => {
           setError('You\'re offline. Connect to the internet to sync.');
         }
       } else {
-        setError(err.response?.data?.error || 'Failed to refresh grades.');
+        setError(httpErr.response?.data?.error || 'Failed to refresh grades.');
       }
+
       setIsAutoLoggingIn(false);
       setLoading(false);
       setBackgroundLoading(false);
@@ -320,40 +510,20 @@ const App: React.FC = () => {
   };
 
   const processAndSetData = (newGrades: Grade[], newInfo: StudentInfo, headers?: string[]) => {
-    // We want to replace local grades with the fresh list, but keep track of what's "new"
-    // "New" means it wasn't in the previous list, OR it was already marked new and hasn't been cleared.
-
     const oldGradesMap = new Map<string, Grade>();
-    // Key by unique properties to identify the "same" grade entry
-    const createKey = (g: Grade) => `${g.code}-${g.year}-${g.semester}`;
-
-    if (grades.length > 0) {
-      grades.forEach(g => oldGradesMap.set(createKey(g), g));
-    }
+    grades.forEach(g => oldGradesMap.set(gradeKey(g), g));
 
     const processedGrades = newGrades.map(g => {
-      const key = createKey(g);
+      const key = gradeKey(g);
       const existing = oldGradesMap.get(key);
+      const hasValidGrade = !!(g.grade && g.grade.trim() !== '');
+
       let isNew = false;
-
-      // Rule 1: If no previous grades existed, nothing is "new" (initial population).
-      if (grades.length === 0) {
-        isNew = false;
-      } else {
-        // Rule 2: Only grades with actual values qualify as new
-        const hasValidGrade = g.grade && g.grade.trim() !== "";
-
-        if (existing) {
-          // If value or status changed, it's new (if valid)
-          if (existing.grade !== g.grade || existing.status !== g.status) {
-            if (hasValidGrade) isNew = true;
-          } else {
-            // Otherwise preserve existing state
-            isNew = existing.isNew || false;
-          }
+      if (existing) {
+        if (hasValidGrade && existing.grade !== g.grade) {
+          isNew = true;
         } else {
-          // New entry in list
-          if (hasValidGrade) isNew = true;
+          isNew = existing.isNew || false;
         }
       }
 
@@ -379,14 +549,15 @@ const App: React.FC = () => {
     if (!token) return;
     setLoading(true);
     setCaptchaMessage(undefined);
+
     try {
       const res = await axios.post(`${API_URL}/refresh-captcha`, { token });
       if (res.data.captchaImage) {
         setCaptchaImage(res.data.captchaImage);
       }
-    } catch (err: any) {
-      console.error(err);
-      if (err.response?.status === 404 || err.response?.data?.error === 'Session expired') {
+    } catch (err: unknown) {
+      const httpErr = err as { response?: { data?: { error?: string }; status?: number } };
+      if (httpErr.response?.status === 404 || httpErr.response?.data?.error === 'Session expired') {
         setCaptchaImage(null);
         setToken(null);
         setIsAutoLoggingIn(false);
@@ -401,8 +572,10 @@ const App: React.FC = () => {
 
   const handleCaptchaSolve = async (answer: string) => {
     if (!token) return;
+
     setLoading(true);
     setError(null);
+
     try {
       const res = await axios.post(`${API_URL}/solve-captcha`, { token, answer });
 
@@ -422,15 +595,15 @@ const App: React.FC = () => {
         setCaptchaImage(null);
         setLoading(false);
       }
-    } catch (err: any) {
-      console.error(err);
-      if (err.response?.status === 404 || err.response?.data?.error === 'Session expired') {
+    } catch (err: unknown) {
+      const httpErr = err as { response?: { data?: { error?: string }; status?: number } };
+      if (httpErr.response?.status === 404 || httpErr.response?.data?.error === 'Session expired') {
         setCaptchaImage(null);
         setToken(null);
         setIsAutoLoggingIn(false);
       }
-      setError(err.response?.data?.error || 'Verification failed. Please try again.');
-      // Don't close modal, just refresh for new attempt
+
+      setError(httpErr.response?.data?.error || 'Verification failed. Please try again.');
       await handleRefreshCaptcha();
       setLoading(false);
     }
@@ -442,39 +615,22 @@ const App: React.FC = () => {
     setIsAutoLoggingIn(false);
   };
 
-  const handleLogout = () => {
-    axios.post(`${API_URL}/logout`).catch(console.error);
-    setToken(null);
-    setGrades([]);
-    setStudentInfo(null);
-    localStorage.removeItem('up_grades');
-    localStorage.removeItem('up_studentInfo');
-    localStorage.removeItem('up_user');
-    localStorage.removeItem('up_pass');
-    localStorage.removeItem('up_session_cookies');
-    setIsAutoLoggingIn(false);
-    setHasCredentials(false);
-    setLoading(false);
-    setBackgroundLoading(false);
-  };
-
-  // Filter latest grades
   const latestGrades = useMemo(() => {
     const sorted = [...grades].sort((a, b) => {
       if (a.year !== b.year) return b.year.localeCompare(a.year);
       return 0;
     });
-    const unique = new Map();
+
+    const unique = new Map<string, Grade>();
     sorted.forEach(g => {
       if (!unique.has(g.code)) unique.set(g.code, g);
     });
+
     return Array.from(unique.values());
   }, [grades]);
 
   return (
     <div className="min-h-screen font-sans text-gray-900 bg-gray-50 transition-colors duration-300 dark:bg-gray-900 dark:text-gray-100">
-      {/* Error Toast */}
-      {/* Error Toast */}
       <AnimatePresence>
         {error && (
           <motion.div
@@ -500,6 +656,8 @@ const App: React.FC = () => {
           loading={loading}
           darkMode={darkMode}
           toggleTheme={toggleTheme}
+          autoSolveEnabled={autoSolveEnabled}
+          onAutoSolveChange={setAutoSolveEnabled}
           onLogin={({ username, pass, remember }) => {
             handleLogin({ username, pass, remember });
           }}
@@ -533,6 +691,15 @@ const App: React.FC = () => {
             selectedCourseCode={selectedCourseCode}
             onSelectCourse={handleSelectCourse}
             animateOut={animateOut}
+            apiUrl={API_URL}
+            username={activeUsername || localStorage.getItem('up_user') || ''}
+            deviceId={deviceId}
+            deviceModel={deviceModel}
+            autoSolveEnabled={autoSolveEnabled}
+            onAutoSolveChange={setAutoSolveEnabled}
+            passwordBase64={getPasswordBase64()}
+            mongoEnabled={features.mongoEnabled}
+            pushEnabled={features.pushEnabled}
           />
         </>
       )}

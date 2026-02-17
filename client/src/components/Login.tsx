@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { Lock, User, Eye, EyeOff, Moon, Sun } from 'lucide-react';
 import { motion } from 'framer-motion';
 
@@ -7,22 +7,25 @@ interface LoginProps {
     loading?: boolean;
     darkMode: boolean;
     toggleTheme: () => void;
+    autoSolveEnabled: boolean;
+    onAutoSolveChange: (enabled: boolean) => void;
 }
 
-export const Login: React.FC<LoginProps> = ({ onLogin, loading = false, darkMode, toggleTheme }) => {
-    const [username, setUsername] = useState('');
-    const [password, setPassword] = useState('');
+export const Login: React.FC<LoginProps> = ({
+    onLogin,
+    loading = false,
+    darkMode,
+    toggleTheme,
+    autoSolveEnabled,
+    onAutoSolveChange
+}) => {
+    const [username, setUsername] = useState(() => localStorage.getItem('up_user') || '');
+    const [password, setPassword] = useState(() => {
+        const saved = localStorage.getItem('up_pass');
+        return saved ? atob(saved) : '';
+    });
     const [remember, setRemember] = useState(true);
     const [showPassword, setShowPassword] = useState(false);
-
-    useEffect(() => {
-        const savedUser = localStorage.getItem('up_user');
-        const savedPass = localStorage.getItem('up_pass');
-        if (savedUser && savedPass) {
-            setUsername(savedUser);
-            setPassword(atob(savedPass)); // Simple base64 for obfuscation, not security
-        }
-    }, []);
 
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();
@@ -116,6 +119,20 @@ export const Login: React.FC<LoginProps> = ({ onLogin, loading = false, darkMode
                         </label>
                     </div>
 
+                    <div className="flex items-center ml-1">
+                        <input
+                            id="auto-solve"
+                            type="checkbox"
+                            checked={autoSolveEnabled}
+                            onChange={(e) => onAutoSolveChange(e.target.checked)}
+                            className="w-5 h-5 rounded text-indigo-600 focus:ring-indigo-500 border-gray-300 dark:border-gray-700 bg-gray-100 dark:bg-slate-800 focus:ring-offset-0 cursor-pointer"
+                            disabled={loading}
+                        />
+                        <label htmlFor="auto-solve" className="ml-3 block text-sm font-medium text-gray-600 dark:text-gray-400 cursor-pointer select-none">
+                            Auto Solve Captcha
+                        </label>
+                    </div>
+
                     <button
                         type="submit"
                         disabled={loading}
@@ -131,8 +148,8 @@ export const Login: React.FC<LoginProps> = ({ onLogin, loading = false, darkMode
                 </form>
 
                 <p className="mt-8 text-center text-[10px] text-gray-400 dark:text-gray-500 leading-tight">
-                    Your credentials are encrypted and stored locally on your device.<br />
-                    They are never saved on our servers.
+                    Credentials are stored locally on your device for login convenience.<br />
+                    If push notifications are enabled, server-side password storage requires explicit consent.
                 </p>
             </div>
         </div>

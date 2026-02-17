@@ -122,6 +122,7 @@ const scrapeFrame = async (frame) => {
                 title: title,
                 grade: (getVal(headerMap.grade) || '').replace(',', '.'),
                 year: getVal(headerMap.year),
+                session: getVal(headerMap.acadSession),
                 ects: (getVal(headerMap.ects) || '').replace(',', '.'),
                 status: bkgStatus || getVal(headerMap.status) || 'Enrolled',
                 category: getVal(headerMap.category),

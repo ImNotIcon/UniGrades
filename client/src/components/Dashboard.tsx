@@ -1,10 +1,11 @@
-import React, { useMemo, useEffect, useState, useCallback } from 'react';
+import React, { useMemo, useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Chart as ChartJS, ArcElement, Tooltip, Legend, CategoryScale, LinearScale, BarElement, Title, PointElement, LineElement, Filler } from 'chart.js';
 import ChartDataLabels from 'chartjs-plugin-datalabels';
 import { Pie, Bar, Line } from 'react-chartjs-2';
-import { LogOut, RefreshCw, Moon, Sun, ArrowLeft, Bell, BellOff } from 'lucide-react';
+import { LogOut, RefreshCw, Moon, Sun, ArrowLeft, Settings } from 'lucide-react';
 import type { Grade, StudentInfo } from '../types';
+import { SettingsModal } from './SettingsModal';
 
 ChartJS.register(ArcElement, Tooltip, Legend, CategoryScale, LinearScale, BarElement, Title, PointElement, LineElement, Filler);
 
@@ -21,6 +22,15 @@ interface DashboardProps {
     selectedCourseCode: string | null;
     onSelectCourse: (code: string | null) => void;
     animateOut?: boolean;
+    apiUrl: string;
+    username: string;
+    deviceId: string;
+    deviceModel: string;
+    autoSolveEnabled: boolean;
+    onAutoSolveChange: (enabled: boolean) => void;
+    passwordBase64: string | null;
+    mongoEnabled: boolean;
+    pushEnabled: boolean;
 }
 
 const getGradeStatus = (gradeStr: string) => {
@@ -48,12 +58,24 @@ const ectsInt = (val: string | undefined) => {
     return isNaN(n) ? val : Math.round(n).toString();
 };
 
+type ChartOptionsLike = {
+    scales?: {
+        x?: Record<string, unknown>;
+    };
+    plugins?: {
+        legend?: {
+            display?: boolean;
+        };
+    };
+    [key: string]: unknown;
+};
+
 const CourseDetailView: React.FC<{
     data: { latest: Grade; history: Grade[] };
     darkMode: boolean;
     onSelectCourse: (code: string | null) => void;
     detailRef: React.RefObject<HTMLDivElement | null>;
-    barOptions: any;
+    barOptions: ChartOptionsLike;
     stripAccents: (s: string) => string;
     animateOut: boolean;
 }> = ({ data, darkMode, onSelectCourse, detailRef, barOptions, stripAccents, animateOut }) => {
@@ -207,83 +229,20 @@ export const Dashboard: React.FC<DashboardProps> = ({
     selectedCourseCode,
     onSelectCourse,
     animateOut = false,
+    apiUrl,
+    username,
+    deviceId,
+    deviceModel,
+    autoSolveEnabled,
+    onAutoSolveChange,
+    passwordBase64,
+    mongoEnabled,
+    pushEnabled,
 }) => {
     const detailRef = React.useRef<HTMLDivElement>(null);
     const scrollingRef = React.useRef(false);
     const scrollTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
-
-    // --- Push Notification State ---
-    const [notifEnabled, setNotifEnabled] = useState(() => {
-        return localStorage.getItem('push_enabled') === 'true';
-    });
-    const [notifLoading, setNotifLoading] = useState(false);
-
-    const API_URL = import.meta.env.VITE_API_URL || `http://${window.location.hostname}:3001/api`;
-
-    const handleToggleNotifications = useCallback(async () => {
-        if (notifLoading) return;
-        setNotifLoading(true);
-
-        try {
-            if (notifEnabled) {
-                // Unsubscribe
-                const registration = await navigator.serviceWorker?.ready;
-                const subscription = await registration?.pushManager?.getSubscription();
-                if (subscription) await subscription.unsubscribe();
-
-                const username = localStorage.getItem('up_user') || '';
-                await fetch(`${API_URL}/push/unsubscribe`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ username })
-                });
-
-                setNotifEnabled(false);
-                localStorage.setItem('push_enabled', 'false');
-            } else {
-                // Request permission
-                const permission = await Notification.requestPermission();
-                if (permission !== 'granted') {
-                    setNotifLoading(false);
-                    return;
-                }
-
-                // Get VAPID key from server
-                const vapidRes = await fetch(`${API_URL}/push/vapid-key`);
-                const { publicKey } = await vapidRes.json();
-                if (!publicKey) throw new Error('No VAPID key configured');
-
-                // Subscribe
-                const registration = await navigator.serviceWorker?.ready;
-                const subscription = await registration?.pushManager?.subscribe({
-                    userVisibleOnly: true,
-                    applicationServerKey: publicKey
-                });
-
-                if (!subscription) throw new Error('Failed to create subscription');
-
-                // Send to server with user info
-                const username = localStorage.getItem('up_user') || '';
-                const storedCookies = localStorage.getItem('up_session_cookies');
-                await fetch(`${API_URL}/push/subscribe`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        subscription: subscription.toJSON(),
-                        username,
-                        cookies: storedCookies ? JSON.parse(storedCookies) : null
-                    })
-                });
-
-                setNotifEnabled(true);
-                localStorage.setItem('push_enabled', 'true');
-            }
-        } catch (err) {
-            console.error('Push notification toggle failed:', err);
-        } finally {
-            setNotifLoading(false);
-        }
-    }, [notifEnabled, notifLoading, API_URL]);
+    const [settingsOpen, setSettingsOpen] = useState(false);
 
     useEffect(() => {
         const onScroll = () => {
@@ -486,9 +445,11 @@ export const Dashboard: React.FC<DashboardProps> = ({
             datalabels: {
                 color: '#fff',
                 font: { weight: 'bold' as const, size: 18 },
-                formatter: (value: number, ctx: any) => {
+                formatter: (value: number, ctx: unknown) => {
                     if (value <= 0) return '';
-                    const label = ctx.chart.data.labels?.[ctx.dataIndex] || '';
+                    const typedCtx = ctx as { chart?: { data?: { labels?: unknown[] } }; dataIndex?: number };
+                    const labels = typedCtx.chart?.data?.labels || [];
+                    const label = labels[typedCtx.dataIndex || 0] || '';
                     return `${label}\n${value}`;
                 },
                 textAlign: 'center' as const,
@@ -505,7 +466,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 max: 10.5,
                 grid: { color: darkMode ? '#374151' : '#f3f4f6' },
                 ticks: { color: darkMode ? '#9ca3af' : '#6b7280' },
-                afterBuildTicks: (axis: any) => {
+                afterBuildTicks: (axis: { ticks: Array<{ value: number }> }) => {
                     axis.ticks = Array.from({ length: 11 }, (_, i) => ({ value: i }));
                 }
             },
@@ -585,17 +546,13 @@ export const Dashboard: React.FC<DashboardProps> = ({
                             >
                                 {darkMode ? <Sun className="w-6 h-6" /> : <Moon className="w-6 h-6" />}
                             </button>
-                            {'serviceWorker' in navigator && 'PushManager' in window && (
+                            {mongoEnabled && (
                                 <button
-                                    onClick={handleToggleNotifications}
-                                    disabled={notifLoading}
-                                    className={`p-3 rounded-full transition-all ${notifLoading ? 'opacity-50 cursor-wait' : ''} ${notifEnabled
-                                        ? (darkMode ? 'text-yellow-400 hover:bg-gray-700' : 'text-yellow-500 hover:bg-yellow-50')
-                                        : (darkMode ? 'text-gray-400 hover:text-yellow-400 hover:bg-gray-700' : 'text-gray-400 hover:text-yellow-500 hover:bg-yellow-50')
-                                        }`}
-                                    title={notifEnabled ? 'Disable Notifications' : 'Enable Notifications'}
+                                    onClick={() => setSettingsOpen(true)}
+                                    className={`p-3 rounded-full transition-all ${darkMode ? 'text-gray-400 hover:text-indigo-300 hover:bg-gray-700' : 'text-gray-400 hover:text-indigo-600 hover:bg-indigo-50'}`}
+                                    title="Settings"
                                 >
-                                    {notifEnabled ? <Bell className="w-6 h-6" /> : <BellOff className="w-6 h-6" />}
+                                    <Settings className="w-6 h-6" />
                                 </button>
                             )}
                             <button
@@ -725,6 +682,25 @@ export const Dashboard: React.FC<DashboardProps> = ({
                         barOptions={barOptions}
                         stripAccents={stripAccents}
                         animateOut={animateOut}
+                    />
+                )}
+            </AnimatePresence>
+
+            <AnimatePresence>
+                {settingsOpen && (
+                    <SettingsModal
+                        isOpen={settingsOpen}
+                        onClose={() => setSettingsOpen(false)}
+                        apiUrl={apiUrl}
+                        darkMode={darkMode}
+                        mongoEnabled={mongoEnabled}
+                        pushEnabled={pushEnabled}
+                        username={username}
+                        deviceId={deviceId}
+                        deviceModel={deviceModel}
+                        autoSolveEnabled={autoSolveEnabled}
+                        onAutoSolveChange={onAutoSolveChange}
+                        passwordBase64={passwordBase64}
                     />
                 )}
             </AnimatePresence>
