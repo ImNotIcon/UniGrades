@@ -11,10 +11,11 @@ function start() {
     console.log(`[Manager] Starting client... Logs at ${logPath}`);
 
     // Using npx vite to avoid dependency issues, or npm run dev
-    const shell = process.platform === 'win32';
-    const client = spawn(shell ? 'npm.cmd' : 'npm', ['run', 'dev'], {
+    const isWin = process.platform === 'win32';
+    const client = spawn(isWin ? 'npm.cmd run dev' : 'npm run dev', [], {
         cwd: __dirname,
-        stdio: ['ignore', 'pipe', 'pipe']
+        stdio: ['ignore', 'pipe', 'pipe'],
+        shell: true
     });
 
     client.stdout.on('data', (data) => {

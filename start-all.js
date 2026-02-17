@@ -3,12 +3,10 @@ const path = require('path');
 
 console.log('--- UniGrades Universal Starter ---');
 
-function run(dir, name) {
-    const shell = process.platform === 'win32';
-    const proc = spawn('node', ['start.js'], {
+function run(dir, name, file = 'start.js') {
+    const proc = spawn('node', [file], {
         cwd: path.join(__dirname, dir),
-        stdio: 'inherit',
-        shell: shell
+        stdio: 'inherit'
     });
 
     proc.on('exit', (code) => {
@@ -19,7 +17,7 @@ function run(dir, name) {
 }
 
 const server = run('server', 'Server');
-const client = run('client', 'Client');
+const client = run('client', 'Client', 'start.cjs');
 
 process.on('SIGINT', () => {
     console.log('\nShutting down...');
