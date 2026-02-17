@@ -348,7 +348,7 @@ async function startGradePortalFlow(token, browser, page, { skipNavigation = fal
         let currentCaptchaBuffer = captchaBuffer;
 
         if (process.env.DISABLE_AUTO_CAPTCHA !== 'true') {
-            const MAX_AUTO_ATTEMPTS = 3;
+            const MAX_AUTO_ATTEMPTS = 2;
             let currentFrame = captchaFrame;
 
             for (let attempt = 1; attempt <= MAX_AUTO_ATTEMPTS; attempt++) {

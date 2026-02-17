@@ -12,7 +12,8 @@ function start() {
 
     const server = spawn('node', ['index.js'], {
         cwd: __dirname,
-        stdio: ['ignore', 'pipe', 'pipe']
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: { ...process.env, NODE_OPTIONS: '--dns-result-order=ipv6first' }
     });
 
     server.stdout.on('data', (data) => {
