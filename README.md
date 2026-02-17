@@ -32,6 +32,7 @@ UniGrades is a modern, responsive web application that allows students of the Un
 ### Prerequisites
 *   Node.js (v18+)
 *   npm or yarn
+*   **Linux Users**: You must install the required system libraries for Puppeteer. See the [Linux Dependencies](#linux-dependencies) section.
 
 ### Installation
 
@@ -106,6 +107,14 @@ UniGrades is a modern, responsive web application that allows students of the Un
 3.  **Dashboard**: View your grades, statistics, and history.
 4.  **Notifications**: Click the bell icon to enable push notifications for new grades.
 5.  **Offline**: Add the app to your home screen (PWA) to access your grades without an internet connection.
+
+## Linux Dependencies
+
+If you are deploying the server on a Linux environment (Ubuntu/Debian), you may need to install the following dependencies for Puppeteer to run correctly:
+
+```bash
+sudo apt-get update && sudo apt-get install -y libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxext6 libxfixes3 libxrandr2 libgbm1 libasound2 libpango-1.0-0 libpangocairo-1.0-0 libstdc++6 libx11-6 libx11-xcb1 libxcb1 libxcursor1 libxi6 libxtst6 ca-certificates libglib2.0-0 libpixman-1-0
+```
 
 ## License 📄
 
