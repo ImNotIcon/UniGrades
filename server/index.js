@@ -21,7 +21,7 @@ const PUSH_SUBSCRIPTIONS = new Map(); // username -> { subscription, cookies, la
 
 if (process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY) {
     webpush.setVapidDetails(
-        process.env.VAPID_EMAIL || 'mailto:admin@unigrades.app',
+        process.env.VAPID_EMAIL || 'mailto:admin@example.com',
         process.env.VAPID_PUBLIC_KEY,
         process.env.VAPID_PRIVATE_KEY
     );
