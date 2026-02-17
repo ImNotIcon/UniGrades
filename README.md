@@ -68,7 +68,13 @@ UniGrades is a modern, responsive web application that allows students of the Un
     VAPID_EMAIL=mailto:admin@example.com
     ```
 
-4.  **Run the Application:**
+4.  **Environment Setup (Client):**
+    Copy `.env.example` to `.env` in the `client` directory:
+    ```env
+    VITE_API_URL=http://localhost:3001/api
+    ```
+
+5.  **Run the Application:**
 
     The easiest way to start both the client and server with automatic restarts and logging is to run the universal starter from the root directory:
 

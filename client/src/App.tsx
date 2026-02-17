@@ -6,7 +6,8 @@ import { CaptchaModal } from './components/CaptchaModal';
 import { Dashboard } from './components/Dashboard';
 import type { Grade, StudentInfo } from './types';
 
-const API_URL = `http://${window.location.hostname}:3001/api`;
+const API_URL = import.meta.env.VITE_API_URL || `http://${window.location.hostname}:3001/api`;
+
 
 const App: React.FC = () => {
   const [token, setToken] = useState<string | null>(null);
