@@ -4,6 +4,7 @@ const puppeteer = require('puppeteer');
 const cors = require('cors');
 const bodyParser = require('body-parser');
 const fs = require('fs');
+const path = require('path');
 const webpush = require('web-push');
 
 const { scrapeGrades } = require('./scraper');
@@ -46,9 +47,10 @@ const BROWSER_LAUNCH_OPTIONS = {
 async function debugScreenshot(page, name) {
     if (process.env.DEBUG_SCREENSHOTS !== 'true') return;
     try {
-        if (!fs.existsSync('screenshots')) fs.mkdirSync('screenshots');
+        const screenshotsDir = path.join(__dirname, 'screenshots');
+        if (!fs.existsSync(screenshotsDir)) fs.mkdirSync(screenshotsDir, { recursive: true });
         const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-        const filename = `screenshots/${timestamp}_${name}.png`;
+        const filename = path.join(screenshotsDir, `${timestamp}_${name}.png`);
         await page.screenshot({ path: filename, fullPage: true });
         console.log(`Debug screenshot saved: ${filename}`);
     } catch (e) {
