@@ -67,7 +67,28 @@ const INACTIVE_DEVICE_MS = 14 * 24 * 60 * 60 * 1000;
 const BACKGROUND_CHECK_TICK_MS = 60 * 1000;
 
 const SESSIONS = new Map();
+const USER_QUEUES = new Map();
 let backgroundWorkerBusy = false;
+
+/**
+ * Ensures only one active grade refresh per user is running.
+ */
+async function enqueueUserTask(username, taskFn) {
+    if (!username) return taskFn();
+
+    const previous = USER_QUEUES.get(username) || Promise.resolve();
+    const current = previous.catch(() => { }).then(async () => {
+        return await taskFn();
+    }).finally(() => {
+        if (USER_QUEUES.get(username) === current) {
+            USER_QUEUES.delete(username);
+        }
+    });
+
+    USER_QUEUES.set(username, current);
+    return current;
+}
+
 
 const mongoState = {
     client: null,
@@ -516,13 +537,14 @@ function createSession(browser, page, {
     username = '',
     deviceId = '',
     deviceModel = '',
-    autoSolveEnabled = true
+    autoSolveEnabled = true,
+    status = 'loading'
 } = {}) {
     const token = Math.random().toString(36).substring(2, 12);
     SESSIONS.set(token, {
         browser,
         page,
-        status: 'loading',
+        status,
         username,
         deviceId,
         deviceModel,
@@ -777,6 +799,7 @@ async function submitCaptchaAndVerify(page, captchaFrame, answer) {
     const finalCheck = await page.evaluate(() => !!document.querySelector('table[id*="GRADES"]'));
     if (finalCheck) return true;
 
+    await debugScreenshot(page, 'verification_timeout');
     throw new Error('Verification timed out (no success indicator found)');
 }
 
@@ -1036,79 +1059,81 @@ async function startGradePortalFlow(token, browser, page, {
 }
 
 async function fetchGradesForNotifications(username, passwordPlain) {
-    let browser;
-    try {
-        const launched = await launchBrowser();
-        browser = launched.browser;
-        const page = launched.page;
-
-        await authenticatePortalLogin(page, username, passwordPlain, 'notifier');
-
-        await page.goto(ACADEMIC_IVIEW_URL, {
-            waitUntil: 'networkidle2',
-            timeout: 45000
-        });
-
-        if (await isBodyEmpty(page)) {
-            throw new Error('Session appears invalid after login.');
-        }
-
-        const captchaFrame = await findGradesFrame(page, false, 12000);
-        if (!captchaFrame) throw new Error('Could not find grades frame.');
-
-        const captchaEl = await findCaptchaImage(captchaFrame);
-        let captchaBuffer = await captchaEl.screenshot({ timeout: 60000 });
-
-        const firstAutoText = await solveCaptcha(captchaBuffer);
-        if (!firstAutoText) {
-            throw new Error('Auto captcha returned null on attempt 1');
-        }
-
+    return enqueueUserTask(username, async () => {
+        let browser;
         try {
-            await submitCaptchaAndVerify(page, captchaFrame, firstAutoText);
-        } catch (error) {
-            if (!isIncorrectCaptchaError(error)) throw error;
+            const launched = await launchBrowser();
+            browser = launched.browser;
+            const page = launched.page;
 
-            await incrementStatistics(username, { incorrectCaptchaCountAuto: 1 });
+            await authenticatePortalLogin(page, username, passwordPlain, 'notifier');
 
-            const refreshed = await refreshCaptcha(page, captchaFrame);
-            if (refreshed) captchaBuffer = refreshed;
+            await page.goto(ACADEMIC_IVIEW_URL, {
+                waitUntil: 'networkidle2',
+                timeout: 45000
+            });
 
-            const secondAutoText = await solveCaptcha(captchaBuffer);
-            if (!secondAutoText) {
-                throw new Error('Auto captcha returned null on attempt 2');
+            if (await isBodyEmpty(page)) {
+                throw new Error('Session appears invalid after login.');
             }
 
-            await submitCaptchaAndVerify(page, captchaFrame, secondAutoText).catch(async secondError => {
-                if (isIncorrectCaptchaError(secondError)) {
-                    await incrementStatistics(username, { incorrectCaptchaCountAuto: 1 });
+            const captchaFrame = await findGradesFrame(page, false, 12000);
+            if (!captchaFrame) throw new Error('Could not find grades frame.');
+
+            const captchaEl = await findCaptchaImage(captchaFrame);
+            let captchaBuffer = await captchaEl.screenshot({ timeout: 60000 });
+
+            const firstAutoText = await solveCaptcha(captchaBuffer);
+            if (!firstAutoText) {
+                throw new Error('Auto captcha returned null on attempt 1');
+            }
+
+            try {
+                await submitCaptchaAndVerify(page, captchaFrame, firstAutoText);
+            } catch (error) {
+                if (!isIncorrectCaptchaError(error)) throw error;
+
+                await incrementStatistics(username, { incorrectCaptchaCountAuto: 1 });
+
+                const refreshed = await refreshCaptcha(page, captchaFrame);
+                if (refreshed) captchaBuffer = refreshed;
+
+                const secondAutoText = await solveCaptcha(captchaBuffer);
+                if (!secondAutoText) {
+                    throw new Error('Auto captcha returned null on attempt 2');
                 }
-                throw secondError;
-            });
-        }
 
-        let result;
-        for (let attempt = 0; attempt < 3; attempt++) {
-            result = await scrapeGrades(page, 'notifier');
-            if (result && Array.isArray(result.grades) && result.grades.length > 0) break;
-            await page.waitForFunction(() => document.querySelector('table, .urST, iframe'), { timeout: 8000 }).catch(() => { });
-        }
+                await submitCaptchaAndVerify(page, captchaFrame, secondAutoText).catch(async secondError => {
+                    if (isIncorrectCaptchaError(secondError)) {
+                        await incrementStatistics(username, { incorrectCaptchaCountAuto: 1 });
+                    }
+                    throw secondError;
+                });
+            }
 
-        if (!result || !Array.isArray(result.grades)) {
-            result = await scrapeGrades(page, 'notifier');
-        }
+            let result;
+            for (let attempt = 0; attempt < 3; attempt++) {
+                result = await scrapeGrades(page, 'notifier');
+                if (result && Array.isArray(result.grades) && result.grades.length > 0) break;
+                await page.waitForFunction(() => document.querySelector('table, .urST, iframe'), { timeout: 8000 }).catch(() => { });
+            }
 
-        await browser.close();
+            if (!result || !Array.isArray(result.grades)) {
+                result = await scrapeGrades(page, 'notifier');
+            }
 
-        return {
-            grades: Array.isArray(result && result.grades) ? result.grades : [],
-            studentInfo: result && result.studentInfo ? result.studentInfo : {}
-        };
-    } finally {
-        if (browser) {
-            await browser.close().catch(() => { });
+            await browser.close();
+
+            return {
+                grades: Array.isArray(result && result.grades) ? result.grades : [],
+                studentInfo: result && result.studentInfo ? result.studentInfo : {}
+            };
+        } finally {
+            if (browser) {
+                await browser.close().catch(() => { });
+            }
         }
-    }
+    });
 }
 
 async function runBackgroundCheckForUser(userDoc) {
@@ -1410,49 +1435,24 @@ app.post('/api/login', async (req, res) => {
 });
 
 app.post('/api/refresh-grades', async (req, res) => {
-    const username = safeString(req.body && req.body.username, { maxLength: 128 });
-    const deviceId = safeString(req.body && req.body.deviceId, { maxLength: 128 });
-    const deviceModel = normalizeDeviceModel(req.body && req.body.deviceModel);
-    const autoSolveEnabled = parseBoolean(req.body && req.body.autoSolveEnabled, true);
+    try {
+        const username = safeString(req.body && req.body.username, { maxLength: 128 });
+        const deviceId = safeString(req.body && req.body.deviceId, { maxLength: 128 });
+        const deviceModel = normalizeDeviceModel(req.body && req.body.deviceModel);
+        const autoSolveEnabled = parseBoolean(req.body && req.body.autoSolveEnabled, true);
 
-    if (isValidIdentifier(username)) {
-        await incrementStatistics(username, { gradeRefreshCount: 1 }, {
-            deviceId,
-            deviceModel,
-            touchLastSeen: true
-        });
-    }
-
-    Logger.info('Grade refresh request received', req, username);
-
-    const cookies = sanitizeCookies(req.body && req.body.cookies);
-    if (!Array.isArray(cookies) || cookies.length === 0) {
         if (isValidIdentifier(username)) {
-            await incrementStatistics(username, { failedRefreshCount: 1 }, {
+            await incrementStatistics(username, { gradeRefreshCount: 1 }, {
                 deviceId,
                 deviceModel,
                 touchLastSeen: true
             });
         }
-        return res.status(400).json({ error: 'No session cookies provided. Please login first.' });
-    }
 
-    let browser;
-    try {
-        const launched = await launchBrowser();
-        browser = launched.browser;
-        const page = launched.page;
+        Logger.info('Grade refresh request received', req, username);
 
-        await page.setCookie(...cookies);
-        Logger.info('Navigating to iView with session cookies...', req, username);
-        await page.goto(ACADEMIC_IVIEW_URL, {
-            waitUntil: 'networkidle2',
-            timeout: 45000
-        });
-
-        if (await isBodyEmpty(page)) {
-            await browser.close();
-
+        const cookies = sanitizeCookies(req.body && req.body.cookies);
+        if (!Array.isArray(cookies) || cookies.length === 0) {
             if (isValidIdentifier(username)) {
                 await incrementStatistics(username, { failedRefreshCount: 1 }, {
                     deviceId,
@@ -1460,38 +1460,72 @@ app.post('/api/refresh-grades', async (req, res) => {
                     touchLastSeen: true
                 });
             }
-
-            return res.status(401).json({
-                error: 'Session expired. Please login again.',
-                expired: true
-            });
+            return res.status(400).json({ error: 'No session cookies provided. Please login first.' });
         }
 
-        Logger.info('Session valid! Starting grade portal flow...', req, username);
+        Logger.info('Session valid! Returning placeholder session...', req, username);
 
-        const sessionToken = createSession(browser, page, {
+        const sessionToken = createSession(null, null, {
             username,
             deviceId,
             deviceModel,
-            autoSolveEnabled
+            autoSolveEnabled,
+            status: 'queued'
         });
 
         res.json({
             success: true,
             token: sessionToken,
-            status: 'loading',
-            message: 'Fetching grades...'
+            status: 'queued',
+            message: 'Waiting for other requests to finish...'
         });
 
-        startGradePortalFlow(sessionToken, browser, page, {
-            skipNavigation: true,
-            autoSolveEnabled
+        enqueueUserTask(username, async () => {
+            const session = SESSIONS.get(sessionToken);
+            if (!session) return;
+
+            let innerBrowser;
+            try {
+                session.status = 'loading';
+                session.message = 'Launching browser...';
+
+                const launched = await launchBrowser();
+                innerBrowser = launched.browser;
+                const page = launched.page;
+
+                session.browser = innerBrowser;
+                session.page = page;
+
+                await page.setCookie(...cookies);
+                Logger.info('Navigating to iView for queued session...', null, sessionToken);
+
+                await page.goto(ACADEMIC_IVIEW_URL, {
+                    waitUntil: 'networkidle2',
+                    timeout: 45000
+                });
+
+                if (await isBodyEmpty(page)) {
+                    throw new Error('Session expired or body empty after navigation.');
+                }
+
+                await startGradePortalFlow(sessionToken, innerBrowser, page, {
+                    skipNavigation: true,
+                    autoSolveEnabled
+                });
+            } catch (error) {
+                Logger.error(`Queued refresh error for ${username}: ${error.message}`, null, sessionToken);
+                if (innerBrowser) await innerBrowser.close().catch(() => { });
+                session.status = 'error';
+                session.error = error.message;
+
+                await incrementStatistics(username, { failedRefreshCount: 1 }, {
+                    deviceId,
+                    deviceModel,
+                    touchLastSeen: true
+                });
+            }
         });
     } catch (error) {
-        if (browser) {
-            await browser.close().catch(() => { });
-        }
-
         if (isValidIdentifier(username)) {
             await incrementStatistics(username, { failedRefreshCount: 1 }, {
                 deviceId,
