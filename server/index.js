@@ -818,16 +818,34 @@ async function authenticatePortalLogin(page, username, password, token) {
     await page.waitForSelector('#loginButton', { visible: true });
 
     Logger.info('Submitting login form...', null, token);
-    const navigationPromise = page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 10000 }).catch(() => { });
-    await page.evaluate(() => {
-        const button = document.querySelector('#loginButton');
-        if (button) button.click();
-    });
-    await navigationPromise;
+    try {
+        await Promise.all([
+            page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 }).catch(() => {
+                Logger.warn('Login navigation timed out, checking state...', null, token);
+            }),
+            page.click('#loginButton')
+        ]);
+    } catch (error) {
+        if (!error.message.includes('context was destroyed')) {
+            throw error;
+        }
+        Logger.info('Handled context destruction during navigation.', null, token);
+    }
 
-    const errorElement = await page.$('.form-element.form-error');
-    if (errorElement) {
-        const errorText = await page.evaluate(el => el.innerText.trim(), errorElement);
+    // Verify if we are still on the login page by checking for the error element
+    // wrapped in a try/catch to handle destroyed context if navigation is still finishing
+    let errorText = null;
+    try {
+        const errorElement = await page.$('.form-element.form-error');
+        if (errorElement) {
+            errorText = await page.evaluate(el => el.textContent.trim(), errorElement);
+        }
+    } catch (e) {
+        // If context destroyed here, we most likely moved to the next page successfully
+        Logger.info('Could not check error element (context transient), proceeding...', null, token);
+    }
+
+    if (errorText) {
         if (errorText.includes('Άγνωστο')) {
             throw new PublicHttpError('Unknown username', 401, 'UNKNOWN_USERNAME');
         }
@@ -837,10 +855,15 @@ async function authenticatePortalLogin(page, username, password, token) {
         throw new PublicHttpError(errorText || 'Invalid credentials', 401, 'INVALID_CREDENTIALS');
     }
 
-    await page.waitForFunction(
-        () => document.cookie.includes('MYSAPSSO2') || document.cookie.includes('saplb'),
-        { timeout: 15000 }
-    );
+    // Wait for the cookie as a confirmation of success
+    try {
+        await page.waitForFunction(
+            () => document.cookie.includes('MYSAPSSO2') || document.cookie.includes('saplb'),
+            { timeout: 15000 }
+        );
+    } catch (e) {
+        Logger.warn('Post-login cookie wait failed, attempting to read available cookies anyway.', null, token);
+    }
 
     return page.cookies();
 }
