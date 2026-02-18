@@ -760,22 +760,12 @@ async function submitCaptchaAndVerify(page, captchaFrame, answer) {
                 if (frame.isDetached()) continue;
 
                 const status = await frame.evaluate(() => {
-                    const text = document.documentElement.innerText || '';
-                    const html = document.documentElement.innerHTML || '';
+                    const text = document.body ? document.body.innerText : '';
+                    const okIcon = document.querySelector('img[src*="SuccessMessage"], img[src*="WD_M_OK"]');
+                    const errIcon = document.querySelector('img[src*="ErrorMessage"], img[src*="WD_M_ERROR"]');
 
-                    // SAP Specific Success Indicators
-                    const okIcon = document.querySelector('img[src*="SuccessMessage"], img[src*="WD_M_OK"], .lsMessageArea--success, img[src*="sapIcon_success"]');
-                    const hasOkText = text.includes('OK!') || text.includes('ΟΚ!') || text.includes('Επιτυχία') || text.includes('Success');
-
-                    // Fallback for cases where images/text are in attributes (SAP common pattern)
-                    const hasOkAttribute = html.includes('SuccessMessage.gif') || html.includes('WD_M_OK.gif');
-
-                    if (okIcon || hasOkText || hasOkAttribute) return 'SUCCESS';
-
-                    const errIcon = document.querySelector('img[src*="ErrorMessage"], img[src*="WD_M_ERROR"], img[src*="sapIcon_error"]');
-                    const hasErrText = text.includes('ERROR!') || text.includes('Λάθος') || text.includes('Σφάλμα') || text.includes('Error');
-
-                    if (errIcon || hasErrText) return 'ERROR';
+                    if (okIcon || text.includes('OK!') || text.includes('ΟΚ!')) return 'SUCCESS';
+                    if (errIcon || text.includes('ERROR!') || text.includes('Λάθος')) return 'ERROR';
                     if (document.querySelector('table[id*="GRADES"]')) return 'SUCCESS';
                     return null;
                 });
