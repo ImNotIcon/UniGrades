@@ -575,30 +575,30 @@ function getActiveFrame(page, frame) {
     ) || null;
 }
 
-async function waitForImageLoad(frame, imgElement) {
+async function waitForImageLoad(frame, imgElement, token = null) {
     await frame.waitForFunction(
         el => el.complete && el.naturalWidth > 0,
         { timeout: 5000 },
         imgElement
     ).catch(() => {
-        Logger.warn('Image load wait timed out, continuing anyway.');
+        Logger.warn('Image load wait timed out, continuing anyway.', null, token);
     });
 }
 
-async function findCaptchaImage(frame) {
+async function findCaptchaImage(frame, token = null) {
     let element = null;
 
     try {
         await frame.waitForSelector(CAPTCHA_IMG_SELECTORS, { timeout: 10000 });
         element = await frame.$(CAPTCHA_IMG_SELECTORS);
     } catch {
-        Logger.warn('Primary captcha selector timed out. Trying fallback image selector.');
+        Logger.warn('Primary captcha selector timed out. Trying fallback image selector.', null, token);
     }
 
     if (!element) element = await frame.$('img');
     if (!element) throw new Error('Captcha element not found');
 
-    await waitForImageLoad(frame, element);
+    await waitForImageLoad(frame, element, token);
     return element;
 }
 
@@ -646,7 +646,7 @@ async function navigateToIview(page, token) {
     });
 }
 
-async function findGradesFrame(page, checkForContent = true, timeoutMs = 15000) {
+async function findGradesFrame(page, checkForContent = true, timeoutMs = 15000, token = null) {
     const startTime = Date.now();
     try {
         const frame = await page.waitForFrame(
@@ -707,7 +707,7 @@ async function refreshCaptcha(page, captchaFrame, token) {
     }
 }
 
-async function submitCaptchaAndVerify(page, captchaFrame, answer) {
+async function submitCaptchaAndVerify(page, captchaFrame, answer, token = null) {
     const activeFrame = getActiveFrame(page, captchaFrame);
     if (!activeFrame) throw new Error('Captcha frame lost');
 
@@ -944,13 +944,13 @@ async function startGradePortalFlow(token, browser, page, {
             await navigateToIview(page, token);
         }
 
-        const captchaFrame = await findGradesFrame(page, false, 12000);
+        const captchaFrame = await findGradesFrame(page, false, 12000, token);
         if (!captchaFrame) throw new Error('Captcha/Grades frame not found.');
 
         session.captchaFrame = captchaFrame;
 
         Logger.info('Capturing captcha element...', null, token);
-        const captchaEl = await findCaptchaImage(captchaFrame);
+        const captchaEl = await findCaptchaImage(captchaFrame, token);
         let currentCaptchaBuffer = await captchaEl.screenshot({ timeout: 60000 });
         let currentFrame = captchaFrame;
 
@@ -1067,33 +1067,33 @@ async function fetchGradesForNotifications(username, passwordPlain) {
                 throw new Error('Session appears invalid after login.');
             }
 
-            const captchaFrame = await findGradesFrame(page, false, 12000);
+            const captchaFrame = await findGradesFrame(page, false, 12000, 'notifier');
             if (!captchaFrame) throw new Error('Could not find grades frame.');
 
-            const captchaEl = await findCaptchaImage(captchaFrame);
+            const captchaEl = await findCaptchaImage(captchaFrame, 'notifier');
             let captchaBuffer = await captchaEl.screenshot({ timeout: 60000 });
 
-            const firstAutoText = await solveCaptcha(captchaBuffer);
+            const firstAutoText = await solveCaptcha(captchaBuffer, 'notifier');
             if (!firstAutoText) {
                 throw new Error('Auto captcha returned null on attempt 1');
             }
 
             try {
-                await submitCaptchaAndVerify(page, captchaFrame, firstAutoText);
+                await submitCaptchaAndVerify(page, captchaFrame, firstAutoText, 'notifier');
             } catch (error) {
                 if (!isIncorrectCaptchaError(error)) throw error;
 
                 await incrementStatistics(username, { incorrectCaptchaCountAuto: 1 });
 
-                const refreshed = await refreshCaptcha(page, captchaFrame);
+                const refreshed = await refreshCaptcha(page, captchaFrame, 'notifier');
                 if (refreshed) captchaBuffer = refreshed;
 
-                const secondAutoText = await solveCaptcha(captchaBuffer);
+                const secondAutoText = await solveCaptcha(captchaBuffer, 'notifier');
                 if (!secondAutoText) {
                     throw new Error('Auto captcha returned null on attempt 2');
                 }
 
-                await submitCaptchaAndVerify(page, captchaFrame, secondAutoText).catch(async secondError => {
+                await submitCaptchaAndVerify(page, captchaFrame, secondAutoText, 'notifier').catch(async secondError => {
                     if (isIncorrectCaptchaError(secondError)) {
                         await incrementStatistics(username, { incorrectCaptchaCountAuto: 1 });
                     }
@@ -1545,7 +1545,7 @@ app.post('/api/solve-captcha', async (req, res) => {
     try {
         const { browser, page, captchaFrame } = session;
 
-        await submitCaptchaAndVerify(page, captchaFrame, answer);
+        await submitCaptchaAndVerify(page, captchaFrame, answer, token);
         executeAsyncScrape(token, browser, page);
 
         const currentCookies = await page.cookies();
