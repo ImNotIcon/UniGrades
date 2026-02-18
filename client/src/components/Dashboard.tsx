@@ -2,8 +2,8 @@ import React, { useMemo, useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Chart as ChartJS, ArcElement, Tooltip, Legend, CategoryScale, LinearScale, BarElement, Title, PointElement, LineElement, Filler } from 'chart.js';
 import ChartDataLabels from 'chartjs-plugin-datalabels';
-import { Pie, Bar, Line } from 'react-chartjs-2';
-import { LogOut, RefreshCw, Moon, Sun, ArrowLeft, Settings, Home, List, Search, Filter, X, ChevronRight } from 'lucide-react';
+import { Pie, Bar } from 'react-chartjs-2';
+import { LogOut, RefreshCw, Moon, Sun, Settings, Home, List, Search, Filter, X, ChevronRight } from 'lucide-react';
 import type { Grade, StudentInfo } from '../types';
 import { SettingsModal } from './SettingsModal';
 
@@ -58,161 +58,13 @@ const ectsInt = (val: string | undefined) => {
     return isNaN(n) ? val : Math.round(n).toString();
 };
 
-type ChartOptionsLike = {
-    scales?: {
-        x?: Record<string, unknown>;
-    };
-    plugins?: {
-        legend?: {
-            display?: boolean;
-        };
-    };
-    [key: string]: unknown;
-};
-
-const CourseDetailView: React.FC<{
-    data: { latest: Grade; history: Grade[] };
-    darkMode: boolean;
-    onSelectCourse: (code: string | null) => void;
-    detailRef: React.RefObject<HTMLDivElement | null>;
-    barOptions: ChartOptionsLike;
-    stripAccents: (s: string) => string;
-    animateOut: boolean;
-}> = ({ data, darkMode, onSelectCourse, detailRef, barOptions, stripAccents, animateOut }) => {
-    const { latest, history } = data;
 
 
 
-    const lineData = {
-        labels: history.map(h => h.year.split('-')[1] || h.year),
-        datasets: [{
-            data: history.map(h => {
-                const v = parseFloat(h.grade.replace(',', '.'));
-                return isNaN(v) ? null : v;
-            }),
-            borderColor: '#6366f1',
-            backgroundColor: 'rgba(99, 102, 241, 0.1)',
-            pointBackgroundColor: history.map(h => {
-                const v = parseFloat(h.grade.replace(',', '.'));
-                if (isNaN(v)) return 'transparent';
-                return v >= 5 ? '#10b981' : '#ef4444';
-            }),
-            pointBorderColor: history.map(h => {
-                const v = parseFloat(h.grade.replace(',', '.'));
-                return isNaN(v) ? 'transparent' : '#6366f1';
-            }),
-            pointRadius: 6,
-            tension: 0.3,
-            fill: true,
-            spanGaps: true
-        }]
-    };
+// Logic for getting status color and other helpers
 
-    return (
-        <motion.div
-            initial={{ x: '100%' }}
-            animate={{ x: 0 }}
-            exit={animateOut ? { x: '100%', transition: { type: 'tween', ease: 'easeOut', duration: 0.25 } } : undefined}
-            transition={{ type: 'spring', stiffness: 400, damping: 35 }}
-            className="fixed inset-0 z-50 overflow-hidden"
-        >
-            <div ref={detailRef} className={`min-h-screen h-screen overflow-y-auto transition-colors duration-300 ${darkMode ? 'bg-gray-900 text-white' : 'bg-gray-50 text-gray-900'}`}>
-                <header className="sticky top-0 z-50 bg-white/80 dark:bg-gray-800/80 backdrop-blur-md border-b border-gray-100 dark:border-gray-700 h-24 flex items-center px-4">
-                    <button onClick={() => onSelectCourse(null)} className="p-3 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-full transition-colors">
-                        <ArrowLeft className="w-6 h-6" />
-                    </button>
-                    <div className="flex-1 px-4 overflow-hidden">
-                        <h2 className="text-base md:text-xl font-black text-center px-4 uppercase tracking-tight leading-tight line-clamp-2">
-                            {latest.title}
-                        </h2>
-                    </div>
-                    <div className="w-10"></div>
-                </header>
 
-                <main className="max-w-4xl mx-auto px-4 pt-8 pb-12 space-y-6">
-                    <div className="space-y-6">
-                        <div className={`p-6 rounded-2xl border transition-colors duration-300 ${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-100'}`}>
-                            <div className="flex items-center justify-between mb-6">
-                                <div>
-                                    <span className="text-xs uppercase font-black opacity-50 block mb-1">Status</span>
-                                    <div className="flex items-center gap-2">
-                                        <div className={`w-3 h-3 rounded-full ${getStatusColor(getGradeStatus(latest.grade), darkMode)}`} />
-                                        <span className="font-bold">
-                                            {getGradeStatus(latest.grade) === 'passed' ? 'Passed' :
-                                                getGradeStatus(latest.grade) === 'failed' ? 'Failed' : 'No grade'}
-                                        </span>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <div className="flex justify-center py-4">
-                                <GradeGauge grade={latest.grade || ''} statusColor={getStatusColor(getGradeStatus(latest.grade), darkMode, true)} darkMode={darkMode} />
-                            </div>
-
-                            <div className={`mt-6 p-4 rounded-xl border flex items-center justify-between ${darkMode ? 'bg-gray-900/50 border-gray-700' : 'bg-gray-50 border-gray-100'}`}>
-                                <div className="text-center flex-1">
-                                    <span className="text-[10px] block uppercase font-black opacity-50 mb-1">Total ECTS</span>
-                                    <span className="text-xl font-bold">{ectsInt(latest.ects) || '0'}</span>
-                                </div>
-                                <div className={`w-px h-8 ${darkMode ? 'bg-gray-700' : 'bg-gray-200'}`} />
-                                <div className="text-center flex-1">
-                                    <span className="text-[10px] block uppercase font-black opacity-50 mb-1">Weighting</span>
-                                    <span className="text-xl font-bold">{latest.gravity || '—'}</span>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div className={`p-6 rounded-2xl border transition-colors duration-300 ${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-100'}`}>
-                        <h3 className="text-sm font-black uppercase tracking-widest mb-4 opacity-50">Score History</h3>
-                        <div className="h-[250px]">
-                            <Line
-                                data={lineData}
-                                options={{
-                                    ...barOptions,
-                                    scales: {
-                                        ...barOptions.scales,
-                                        x: {
-                                            ...barOptions.scales?.x || {},
-                                            offset: history.length === 1
-                                        }
-                                    },
-                                    plugins: { ...barOptions.plugins, legend: { display: false } }
-                                }}
-                            />
-                        </div>
-                    </div>
-
-                    <div className={`p-6 rounded-2xl border transition-colors duration-300 ${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-100'}`}>
-                        <h3 className="text-sm font-black uppercase tracking-widest mb-6 opacity-50">All Attempts</h3>
-                        <div className="space-y-3">
-                            {history.slice().reverse().map((h: Grade, i: number) => {
-                                const status = getGradeStatus(h.grade);
-                                const c = getStatusColor(status, darkMode, true);
-                                return (
-                                    <div key={`${h.code}-${i}`} className={`flex justify-between items-center p-4 rounded-xl ${darkMode ? 'bg-gray-900/50' : 'bg-gray-50'}`}>
-                                        <div className="flex-1 flex flex-col">
-                                            <span className="text-sm font-bold">{h.year}</span>
-                                            <span className="text-xs text-gray-500">
-                                                {(h.acadSession || '').replace(/Εξάμηνο/gi, '').trim()} {h.year} {h.apprStatus ? `| ${h.apprStatus}` : ''}
-                                            </span>
-                                        </div>
-                                        <div className="shrink-0 w-20 flex flex-col items-center justify-center">
-                                            <span className={`text-lg font-black ${c}`}>{h.grade || '—'}</span>
-                                            <p className="text-[10px] uppercase font-bold text-gray-400 text-center">
-                                                {stripAccents(h.bkgStatus || h.status)}
-                                            </p>
-                                        </div>
-                                    </div>
-                                );
-                            })}
-                        </div>
-                    </div>
-                </main>
-            </div>
-        </motion.div>
-    );
-};
+// Tab components
 
 const COLORS = ['#10B981', '#EF4444', '#6B7280']; // Green, Red, Gray
 
@@ -363,7 +215,7 @@ const GradesTab: React.FC<{
         });
     }, [allGrades, searchTerm, filters]);
 
-    const gradesBySemester = useMemo(() => {
+    const semesterGroups = useMemo(() => {
         const groups = new Map<number, { grades: Grade[]; avg: number }>();
         filteredGrades.forEach((g: Grade) => {
             const sem = parseInt(g.semester) || 0;
@@ -438,9 +290,9 @@ const GradesTab: React.FC<{
                     />
                 </div>
 
-                {gradesBySemester.length > 0 && window.scrollY > 100 && (
+                {semesterGroups.length > 0 && window.scrollY > 100 && (
                     <div ref={tabsContainerRef} className="flex gap-2 overflow-x-auto pb-2 -mx-4 px-4 scrollbar-hide no-scrollbar">
-                        {gradesBySemester.map(g => (
+                        {semesterGroups.map(g => (
                             <button
                                 key={g.semester}
                                 data-active={currentSection === g.semester}
@@ -455,7 +307,7 @@ const GradesTab: React.FC<{
             </div>
 
             <div className="space-y-12">
-                {gradesBySemester.map((group) => (
+                {semesterGroups.map((group) => (
                     <div
                         key={group.semester}
                         ref={el => { sectionRefs.current[group.semester] = el; }}
@@ -507,7 +359,7 @@ const GradesTab: React.FC<{
                     </div>
                 ))}
 
-                {gradesBySemester.length === 0 && (
+                {semesterGroups.length === 0 && (
                     <div className="py-20 text-center flex flex-col items-center gap-4 opacity-30">
                         <Search className="w-12 h-12" />
                         <p className="font-bold">No grades found matching your criteria.</p>
@@ -722,22 +574,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
         return { latest, history };
     }, [selectedCourseCode, fullHistory, allGrades]);
 
-    // Group grades by semester
-    const gradesBySemester = useMemo(() => {
-        const groups = new Map<number, Grade[]>();
-        allGrades.forEach((g: Grade) => {
-            const sem = parseInt(g.semester) || 0;
-            if (!groups.has(sem)) groups.set(sem, []);
-            groups.get(sem)?.push(g);
-        });
 
-        const sortedKeys = Array.from(groups.keys()).sort((a, b) => b - a);
-
-        return sortedKeys.map(key => ({
-            semester: key,
-            grades: groups.get(key) || []
-        }));
-    }, [allGrades]);
 
     const metricsData = useMemo(() => {
         let passed = 0;
@@ -1170,5 +1007,96 @@ const GradeGauge: React.FC<{ grade: string; statusColor: string; darkMode: boole
                 )}
             </div>
         </div>
+    );
+};
+
+const CourseDetailView: React.FC<{
+    data: { latest: Grade; history: Grade[] };
+    darkMode: boolean;
+    onSelectCourse: (code: string | null) => void;
+    detailRef: React.RefObject<HTMLDivElement | null>;
+    barOptions: any;
+    stripAccents: (s: string | undefined) => string;
+    animateOut: boolean;
+}> = ({ data, darkMode, onSelectCourse, detailRef, barOptions, stripAccents, animateOut }) => {
+    const { latest, history } = data;
+    const status = getGradeStatus(latest.grade);
+    const statusColor = getStatusColor(status, darkMode, true);
+
+    const historyChartData = {
+        labels: history.map(h => h.acadSession || h.year),
+        datasets: [{
+            label: 'Grade History',
+            data: history.map(h => parseFloat(h.grade.replace(',', '.')) || 0),
+            backgroundColor: '#6366f1',
+            borderRadius: 8,
+            barThickness: 24,
+        }]
+    };
+
+    return (
+        <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={animateOut ? { opacity: 0 } : undefined}
+            className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 backdrop-blur-sm p-0 sm:p-4"
+            onClick={() => onSelectCourse(null)}
+        >
+            <motion.div
+                initial={{ y: '100%' }}
+                animate={{ y: 0 }}
+                exit={{ y: '100%' }}
+                transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+                className={`relative w-full max-w-2xl h-[90vh] sm:h-auto sm:max-h-[85vh] overflow-hidden rounded-t-[2.5rem] sm:rounded-[2.5rem] shadow-2xl ${darkMode ? 'bg-gray-900 border-gray-800' : 'bg-white border-gray-100 shadow-xl'}`}
+                onClick={e => e.stopPropagation()}
+            >
+                <div ref={detailRef} className="h-full overflow-y-auto no-scrollbar p-8 pb-12">
+                    <div className="flex justify-between items-start mb-8">
+                        <div>
+                            <span className={`text-xs font-black uppercase tracking-widest ${darkMode ? 'text-gray-500' : 'text-gray-400'}`}>
+                                {latest.code}
+                            </span>
+                            <h2 className="text-2xl font-black leading-tight mt-1">{latest.title}</h2>
+                        </div>
+                        <button
+                            onClick={() => onSelectCourse(null)}
+                            className="p-2 rounded-full hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+                        >
+                            <X className="w-6 h-6" />
+                        </button>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4 mb-8">
+                        <div className={`p-6 rounded-3xl border ${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200 shadow-sm'}`}>
+                            <span className="text-[10px] font-black uppercase tracking-widest opacity-40 mb-2 block">Current Grade</span>
+                            <span className={`text-4xl font-black ${statusColor}`}>{latest.grade || '—'}</span>
+                        </div>
+                        <span className={`text-lg font-black uppercase ${statusColor}`}>{status}</span>
+                    </div>
+                </div>
+
+                <div className="mb-8">
+                    <h3 className="text-sm font-black uppercase tracking-widest opacity-40 mb-4 px-1">{stripAccents('Ιστορικό')}</h3>
+                    <div className="h-48 w-full p-4 rounded-3xl border border-gray-100 dark:border-gray-800 bg-gray-50/50 dark:bg-gray-800/50">
+                        <Bar data={historyChartData} options={barOptions} />
+                    </div>
+                </div>
+
+                <div className="space-y-3">
+                    <h3 className="text-sm font-black uppercase tracking-widest opacity-40 mb-4 px-1">{stripAccents('Πληροφορίες')}</h3>
+                    {[
+                        { label: 'Academic Session', value: latest.acadSession },
+                        { label: 'Year', value: latest.year },
+                        { label: 'Evaluation Method', value: latest.evalMethod },
+                        { label: 'Approval Status', value: latest.apprStatus }
+                    ].map((item, idx) => item.value && (
+                        <div key={idx} className="flex justify-between items-center py-4 border-b border-gray-100 dark:border-gray-800 last:border-0 px-1">
+                            <span className="text-sm font-bold opacity-50">{item.label}</span>
+                            <span className="text-sm font-black">{item.value}</span>
+                        </div>
+                    ))}
+                </div>
+            </motion.div>
+        </motion.div>
     );
 };

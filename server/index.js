@@ -292,8 +292,7 @@ function defaultStatsDocument(username) {
         captchaRefreshCount: 0,
         incorrectCaptchaCountAuto: 0,
         failedLoginCount: 0,
-        devices: [],
-        updatedAt: new Date()
+        devices: []
     };
 }
 

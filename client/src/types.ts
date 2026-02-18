@@ -20,5 +20,6 @@ export interface Grade {
     bkgStatus?: string;
     gravity?: string;
     greekCredits?: string;
+    evalMethod?: string;
     isNew?: boolean;
 }
