@@ -1,8 +1,8 @@
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 
-async function solveCaptcha(imageBuffer) {
+async function solveCaptcha(imageBuffer, token) {
     if (!process.env.GEMINI_API_KEY) {
-        console.log("No GEMINI_API_KEY found, skipping auto-solve.");
+        Logger.info("No GEMINI_API_KEY found, skipping auto-solve.", null, token);
         return null;
     }
 
@@ -16,11 +16,11 @@ async function solveCaptcha(imageBuffer) {
     const attemptsPerModel = 5;
 
     for (const modelName of models) {
-        console.log(`[Captcha] Switching to model: ${modelName}`);
+        Logger.info(`[Captcha] Switching to model: ${modelName}`, null, token);
 
         for (let attempt = 1; attempt <= attemptsPerModel; attempt++) {
             const attemptStart = Date.now();
-            console.log(`[Captcha] ${modelName} attempt ${attempt}/${attemptsPerModel}...`);
+            Logger.info(`[Captcha] ${modelName} attempt ${attempt}/${attemptsPerModel}...`, null, token);
 
             try {
                 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
@@ -40,25 +40,25 @@ async function solveCaptcha(imageBuffer) {
                 const text = response.text().trim().replace(/[^a-zA-Z0-9]/g, '');
 
                 if (text.length === 6) {
-                    console.log(`[Captcha] Success with ${modelName} on attempt ${attempt}: '${text}' (Time: ${Date.now() - attemptStart}ms)`);
+                    Logger.info(`[Captcha] Success with ${modelName} on attempt ${attempt}: '${text}' (Time: ${Date.now() - attemptStart}ms)`, null, token);
                     return text;
                 } else {
-                    console.warn(`[Captcha] ${modelName} attempt ${attempt} failed validation: Got '${text}' (Length: ${text.length}). Retrying...`);
+                    Logger.warn(`[Captcha] ${modelName} attempt ${attempt} failed validation: Got '${text}' (Length: ${text.length}). Retrying...`, null, token);
                 }
 
             } catch (error) {
                 if (error.message.includes('429')) {
-                    console.error(`[Captcha] Error with ${modelName}: 429 Too Many Requests`);
+                    Logger.error(`[Captcha] Error with ${modelName}: 429 Too Many Requests`, null, token);
                 } else {
-                    console.error(`[Captcha] Error with ${modelName} on attempt ${attempt}: ${error.message}`);
+                    Logger.error(`[Captcha] Error with ${modelName} on attempt ${attempt}: ${error.message}`, null, token);
                 }
-                console.warn(`[Captcha] Skipping remaining attempts for ${modelName} due to error.`);
+                Logger.warn(`[Captcha] Skipping remaining attempts for ${modelName} due to error.`, null, token);
                 break; // Skip to next model on technical error
             }
         }
     }
 
-    console.log(`[Captcha] Failed to solve after trying all models.`);
+    Logger.info(`[Captcha] Failed to solve after trying all models.`, null, token);
     return null;
 }
 

@@ -15,6 +15,46 @@ const app = express();
 app.use(cors());
 app.use(bodyParser.json({ limit: '2mb' }));
 
+/**
+ * Custom Logger with Context (IP & Session)
+ */
+class Logger {
+    static getContext(req, token) {
+        const ip = req ? (req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown').replace('::ffff:', '') : 'system';
+        const session = token ? token.substring(0, 8) : 'server';
+        const timestamp = new Date().toISOString().replace('T', ' ').split('.')[0];
+        return `[${timestamp}] [${ip}] [${session}]`;
+    }
+
+    static info(message, req, token) {
+        console.log(`${this.getContext(req, token)} ${message}`);
+    }
+
+    static warn(message, req, token) {
+        console.warn(`${this.getContext(req, token)} WRN: ${message}`);
+    }
+
+    static error(message, req, token) {
+        console.error(`${this.getContext(req, token)} ERR: ${message}`);
+    }
+}
+
+// Global logger available to other modules if needed (not strictly necessary if we pass context)
+global.Logger = Logger;
+
+// Request Logging Middleware
+app.use((req, res, next) => {
+    const start = Date.now();
+    const token = req.body?.token || req.query?.token;
+
+    res.on('finish', () => {
+        const duration = Date.now() - start;
+        // Only log completion for now to keep it clean, or we can log start too
+        Logger.info(`${req.method} ${req.url} - ${res.statusCode} (${duration}ms)`, req, token);
+    });
+    next();
+});
+
 const PORT = Number(process.env.PORT || 3001);
 const DB_NAME = 'unigrades';
 const SUBSCRIPTIONS_COLLECTION = 'subscriptions';
@@ -58,7 +98,7 @@ if (hasVapidConfig) {
         process.env.VAPID_PUBLIC_KEY,
         process.env.VAPID_PRIVATE_KEY
     );
-    console.log('Web Push configured with VAPID keys.');
+    Logger.info('Web Push configured with VAPID keys.');
 }
 
 class PublicHttpError extends Error {
@@ -217,7 +257,7 @@ function isMongoEnabled() {
 async function initMongo() {
     const uri = safeString(process.env.MONGODB_URI, { maxLength: 2048, trim: true });
     if (!uri) {
-        console.log('MongoDB URI not configured. Notifications/statistics features are disabled.');
+        Logger.info('MongoDB URI not configured. Notifications/statistics features are disabled.');
         return;
     }
 
@@ -232,12 +272,12 @@ async function initMongo() {
         mongoState.client = client;
         mongoState.db = client.db(DB_NAME);
         mongoState.enabled = true;
-        console.log(`MongoDB connected (${DB_NAME}).`);
+        Logger.info(`MongoDB connected (${DB_NAME}).`);
     } catch (error) {
         mongoState.client = null;
         mongoState.db = null;
         mongoState.enabled = false;
-        console.error('MongoDB connection failed:', error.message);
+        Logger.error(`MongoDB connection failed: ${error.message}`);
     }
 }
 
@@ -467,9 +507,9 @@ async function debugScreenshot(page, name) {
         const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
         const filename = path.join(screenshotsDir, `${timestamp}_${name}.png`);
         await page.screenshot({ path: filename, fullPage: true });
-        console.log(`Debug screenshot saved: ${filename}`);
+        Logger.info(`Debug screenshot saved: ${filename}`);
     } catch (error) {
-        console.error('Failed to create debug screenshot:', error.message);
+        Logger.error(`Failed to create debug screenshot: ${error.message}`);
     }
 }
 
@@ -500,7 +540,7 @@ async function closeSession(token) {
 
     try {
         if (session.browser) {
-            await session.browser.close().catch(() => {});
+            await session.browser.close().catch(() => { });
         }
     } finally {
         SESSIONS.delete(token);
@@ -520,7 +560,7 @@ async function waitForImageLoad(frame, imgElement) {
         { timeout: 5000 },
         imgElement
     ).catch(() => {
-        console.warn('Image load wait timed out, continuing anyway.');
+        Logger.warn('Image load wait timed out, continuing anyway.');
     });
 }
 
@@ -531,7 +571,7 @@ async function findCaptchaImage(frame) {
         await frame.waitForSelector(CAPTCHA_IMG_SELECTORS, { timeout: 10000 });
         element = await frame.$(CAPTCHA_IMG_SELECTORS);
     } catch {
-        console.warn('Primary captcha selector timed out. Trying fallback image selector.');
+        Logger.warn('Primary captcha selector timed out. Trying fallback image selector.');
     }
 
     if (!element) element = await frame.$('img');
@@ -564,8 +604,8 @@ async function launchBrowser() {
     return { browser, page };
 }
 
-async function navigateToIview(page) {
-    console.log('Navigating to Academic Work iView...');
+async function navigateToIview(page, token) {
+    Logger.info('Navigating to Academic Work iView...', null, token);
 
     for (let attempt = 0; attempt < 2; attempt++) {
         try {
@@ -575,7 +615,7 @@ async function navigateToIview(page) {
             });
             if (response && response.status() !== 404) return;
         } catch (error) {
-            console.warn(`iView navigation attempt ${attempt + 1} failed:`, error.message);
+            Logger.warn(`iView navigation attempt ${attempt + 1} failed: ${error.message}`, null, token);
         }
     }
 
@@ -599,20 +639,20 @@ async function findGradesFrame(page, checkForContent = true, timeoutMs = 15000) 
         await frame.waitForSelector('.urST, .urLinStd, table, tr', { timeout: remaining });
         return frame;
     } catch (error) {
-        console.warn('findGradesFrame timed out:', error.message);
+        Logger.warn(`findGradesFrame timed out: ${error.message}`, null, token);
         return null;
     }
 }
 
-async function refreshCaptcha(page, captchaFrame) {
-    console.log('Refreshing captcha...');
+async function refreshCaptcha(page, captchaFrame, token) {
+    Logger.info('Refreshing captcha...', null, token);
     try {
         const activeFrame = getActiveFrame(page, captchaFrame);
         if (!activeFrame) throw new Error('Refresh failed: frame lost');
 
         const refreshButton = await activeFrame.$('div[title="Ανανέωση"]') || await activeFrame.$('img[src*="TbRefresh.gif"]');
         if (!refreshButton) {
-            console.warn('Captcha refresh button not found.');
+            Logger.warn('Captcha refresh button not found.', null, token);
             return null;
         }
 
@@ -632,7 +672,7 @@ async function refreshCaptcha(page, captchaFrame) {
                 CAPTCHA_IMG_SELECTORS
             );
         } catch {
-            console.warn('Captcha source change wait timed out. Continuing.');
+            Logger.warn('Captcha source change wait timed out. Continuing.', null, token);
         }
 
         const newCaptchaEl = await activeFrame.$(CAPTCHA_IMG_SELECTORS) || await activeFrame.$('img');
@@ -641,7 +681,7 @@ async function refreshCaptcha(page, captchaFrame) {
         await waitForImageLoad(activeFrame, newCaptchaEl);
         return await newCaptchaEl.screenshot();
     } catch (error) {
-        console.error('Error refreshing captcha:', error.message);
+        Logger.error(`Error refreshing captcha: ${error.message}`, null, token);
         return null;
     }
 }
@@ -678,7 +718,7 @@ async function submitCaptchaAndVerify(page, captchaFrame, answer) {
         await page.keyboard.up('Control');
         await page.keyboard.press('Backspace');
     } catch (error) {
-        console.warn('Failed clearing captcha field with shortcut:', error.message);
+        Logger.warn(`Failed clearing captcha field with shortcut: ${error.message}`, null, token);
     }
 
     await inputField.type(answer);
@@ -710,9 +750,11 @@ async function submitCaptchaAndVerify(page, captchaFrame, answer) {
                 });
 
                 if (status === 'SUCCESS') {
+                    Logger.info('Verification Success!', null, token);
                     return true;
                 }
                 if (status === 'ERROR') {
+                    Logger.warn('Verification Error flagged by portal.', null, token);
                     throw new Error('Incorrect captcha code. Please try again.');
                 }
             } catch (error) {
@@ -720,7 +762,7 @@ async function submitCaptchaAndVerify(page, captchaFrame, answer) {
             }
         }
 
-        await page.waitForNetworkIdle({ idleTime: 300, timeout: 2000 }).catch(() => {});
+        await page.waitForNetworkIdle({ idleTime: 300, timeout: 2000 }).catch(() => { });
     }
 
     const finalCheck = await page.evaluate(() => !!document.querySelector('table[id*="GRADES"]'));
@@ -729,8 +771,8 @@ async function submitCaptchaAndVerify(page, captchaFrame, answer) {
     throw new Error('Verification timed out (no success indicator found)');
 }
 
-async function authenticatePortalLogin(page, username, password) {
-    console.log('Navigating to login page...');
+async function authenticatePortalLogin(page, username, password, token) {
+    Logger.info('Navigating to login page...', null, token);
     await page.goto('https://progress.upatras.gr', { waitUntil: 'networkidle2' });
 
     let usernameSelector = '#inputEmail';
@@ -743,7 +785,7 @@ async function authenticatePortalLogin(page, username, password) {
             const loginButton = await page.$('a[href*="login"], a[href*="Login"], div[title="Είσοδος"]');
             if (loginButton) {
                 await Promise.all([
-                    page.waitForNavigation({ waitUntil: 'networkidle2' }).catch(() => {}),
+                    page.waitForNavigation({ waitUntil: 'networkidle2' }).catch(() => { }),
                     loginButton.click()
                 ]);
             }
@@ -760,12 +802,14 @@ async function authenticatePortalLogin(page, username, password) {
         }
     }
 
+    Logger.info('Entering credentials...', null, token);
     await page.type(usernameSelector, username);
     await page.type(passwordSelector, password);
 
     await page.waitForSelector('#loginButton', { visible: true });
 
-    const navigationPromise = page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 10000 }).catch(() => {});
+    Logger.info('Submitting login form...', null, token);
+    const navigationPromise = page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 10000 }).catch(() => { });
     await page.evaluate(() => {
         const button = document.querySelector('#loginButton');
         if (button) button.click();
@@ -797,17 +841,16 @@ async function executeAsyncScrape(token, browser, page) {
     if (!session) return;
 
     session.status = 'loading';
-
     try {
         let result;
         for (let attempt = 0; attempt < 3; attempt++) {
-            result = await scrapeGrades(page);
+            result = await scrapeGrades(page, token);
             if (result && Array.isArray(result.grades) && result.grades.length > 0) break;
-            await page.waitForFunction(() => document.querySelector('table, .urST, iframe'), { timeout: 8000 }).catch(() => {});
+            await page.waitForFunction(() => document.querySelector('table, .urST, iframe'), { timeout: 8000 }).catch(() => { });
         }
 
         if (!result || !Array.isArray(result.grades)) {
-            result = await scrapeGrades(page);
+            result = await scrapeGrades(page, token);
         }
 
         const latestSession = SESSIONS.get(token);
@@ -817,6 +860,7 @@ async function executeAsyncScrape(token, browser, page) {
         await browser.close();
 
         latestSession.status = 'completed';
+        Logger.info('Async scraping completed successfully.', null, token);
         latestSession.result = {
             grades: result.grades || [],
             studentInfo: result.studentInfo || {},
@@ -824,12 +868,12 @@ async function executeAsyncScrape(token, browser, page) {
             cookies: newCookies
         };
     } catch (error) {
-        console.error('Background scrape for session failed:', error.message);
+        Logger.error(`Background scrape for session failed: ${error.message}`, null, token);
 
         const latestSession = SESSIONS.get(token);
         if (latestSession) {
             if (latestSession.browser) {
-                await latestSession.browser.close().catch(() => {});
+                await latestSession.browser.close().catch(() => { });
             }
             latestSession.status = 'error';
             latestSession.error = error.message;
@@ -852,7 +896,7 @@ async function startGradePortalFlow(token, browser, page, {
 
     try {
         if (!skipNavigation) {
-            await navigateToIview(page);
+            await navigateToIview(page, token);
         }
 
         const captchaFrame = await findGradesFrame(page, false, 12000);
@@ -860,6 +904,7 @@ async function startGradePortalFlow(token, browser, page, {
 
         session.captchaFrame = captchaFrame;
 
+        Logger.info('Capturing captcha element...', null, token);
         const captchaEl = await findCaptchaImage(captchaFrame);
         let currentCaptchaBuffer = await captchaEl.screenshot({ timeout: 60000 });
         let currentFrame = captchaFrame;
@@ -870,10 +915,12 @@ async function startGradePortalFlow(token, browser, page, {
         if (canAutoSolve) {
             let allowSecondAttempt = false;
 
-            const firstAutoText = await solveCaptcha(currentCaptchaBuffer);
+            const firstAutoText = await solveCaptcha(currentCaptchaBuffer, token);
             if (firstAutoText) {
+                Logger.info(`Auto-solving attempt 1/2: ${firstAutoText}`, null, token);
                 try {
-                    await submitCaptchaAndVerify(page, currentFrame, firstAutoText);
+                    Logger.info('Waiting for captcha verification result...', null, token);
+                    await submitCaptchaAndVerify(page, currentFrame, firstAutoText, token);
                     return executeAsyncScrape(token, browser, page);
                 } catch (error) {
                     if (isIncorrectCaptchaError(error)) {
@@ -884,24 +931,26 @@ async function startGradePortalFlow(token, browser, page, {
                             touchLastSeen: true
                         });
                     } else {
-                        console.warn(`Auto-solve attempt 1 failed with technical error: ${error.message}`);
+                        Logger.warn(`Auto-solve attempt 1 failed with technical error: ${error.message}`, null, token);
                     }
                 }
             } else {
-                console.warn('Auto-solve attempt 1 returned <null>; skipping second attempt.');
+                Logger.warn('Auto-solve attempt 1 returned <null>; skipping second attempt.', null, token);
             }
 
             if (allowSecondAttempt) {
-                const refreshedBuffer = await refreshCaptcha(page, currentFrame);
+                const refreshedBuffer = await refreshCaptcha(page, currentFrame, token);
                 if (refreshedBuffer) {
                     currentCaptchaBuffer = refreshedBuffer;
                     currentFrame = getActiveFrame(page, currentFrame) || currentFrame;
                 }
 
-                const secondAutoText = await solveCaptcha(currentCaptchaBuffer);
+                const secondAutoText = await solveCaptcha(currentCaptchaBuffer, token);
                 if (secondAutoText) {
+                    Logger.info(`Auto-solving attempt 2/2: ${secondAutoText}`, null, token);
                     try {
-                        await submitCaptchaAndVerify(page, currentFrame, secondAutoText);
+                        Logger.info('Waiting for captcha verification result...', null, token);
+                        await submitCaptchaAndVerify(page, currentFrame, secondAutoText, token);
                         return executeAsyncScrape(token, browser, page);
                     } catch (error) {
                         if (isIncorrectCaptchaError(error)) {
@@ -911,11 +960,11 @@ async function startGradePortalFlow(token, browser, page, {
                                 touchLastSeen: true
                             });
                         }
-                        console.warn(`Auto-solve attempt 2 failed: ${error.message}`);
+                        Logger.warn(`Auto-solve attempt 2 failed: ${error.message}`, null, token);
                     }
                 }
 
-                const manualRefresh = await refreshCaptcha(page, currentFrame);
+                const manualRefresh = await refreshCaptcha(page, currentFrame, token);
                 if (manualRefresh) {
                     currentCaptchaBuffer = manualRefresh;
                 }
@@ -937,10 +986,10 @@ async function startGradePortalFlow(token, browser, page, {
             });
         }
     } catch (error) {
-        console.error('Portal flow error:', error.message);
+        Logger.error(`Portal flow error: ${error.message}`, null, token);
 
         if (session.browser) {
-            await session.browser.close().catch(() => {});
+            await session.browser.close().catch(() => { });
         }
 
         session.status = 'error';
@@ -961,7 +1010,7 @@ async function fetchGradesForNotifications(username, passwordPlain) {
         browser = launched.browser;
         const page = launched.page;
 
-        await authenticatePortalLogin(page, username, passwordPlain);
+        await authenticatePortalLogin(page, username, passwordPlain, 'notifier');
 
         await page.goto(ACADEMIC_IVIEW_URL, {
             waitUntil: 'networkidle2',
@@ -1008,13 +1057,13 @@ async function fetchGradesForNotifications(username, passwordPlain) {
 
         let result;
         for (let attempt = 0; attempt < 3; attempt++) {
-            result = await scrapeGrades(page);
+            result = await scrapeGrades(page, 'notifier');
             if (result && Array.isArray(result.grades) && result.grades.length > 0) break;
-            await page.waitForFunction(() => document.querySelector('table, .urST, iframe'), { timeout: 8000 }).catch(() => {});
+            await page.waitForFunction(() => document.querySelector('table, .urST, iframe'), { timeout: 8000 }).catch(() => { });
         }
 
         if (!result || !Array.isArray(result.grades)) {
-            result = await scrapeGrades(page);
+            result = await scrapeGrades(page, 'notifier');
         }
 
         await browser.close();
@@ -1025,7 +1074,7 @@ async function fetchGradesForNotifications(username, passwordPlain) {
         };
     } finally {
         if (browser) {
-            await browser.close().catch(() => {});
+            await browser.close().catch(() => { });
         }
     }
 }
@@ -1102,7 +1151,7 @@ async function runBackgroundCheckForUser(userDoc) {
                         data: { url: '/' }
                     });
                 } catch (error) {
-                    console.warn(`Failed sending inactive-device notification to ${username}/${entry.deviceId}:`, error.message);
+                    Logger.warn(`Failed sending inactive-device notification to ${username}/${entry.deviceId}: ${error.message}`, null, username);
                 }
             }
             continue;
@@ -1117,7 +1166,7 @@ async function runBackgroundCheckForUser(userDoc) {
     }
 
     if (!isValidBase64(userDoc.passwordBase64)) {
-        console.warn(`Skipping background check for ${username}: invalid stored password base64.`);
+        Logger.warn(`Skipping background check for ${username}: invalid stored password base64.`);
         await cols.subscriptions.updateOne(
             { _id: username },
             {
@@ -1136,7 +1185,7 @@ async function runBackgroundCheckForUser(userDoc) {
     try {
         fetched = await fetchGradesForNotifications(username, passwordPlain);
     } catch (error) {
-        console.error(`Background grade check failed for ${username}:`, error.message);
+        Logger.error(`Background grade check failed for ${userDoc._id}: ${error.message}`);
         return;
     }
 
@@ -1185,7 +1234,7 @@ async function runBackgroundCheckForUser(userDoc) {
                         sentAt: new Date()
                     });
                 } catch (error) {
-                    console.error(`Push send failed for ${username}/${entry.deviceId}:`, error.message);
+                    Logger.error(`Push send failed for ${username}/${entry.deviceId}: ${error.message}`, null, username);
                     if (isExpiredPushSubscriptionError(error)) {
                         pushStillValid = false;
                         break;
@@ -1235,18 +1284,18 @@ async function runBackgroundChecks() {
         const docs = await cols.subscriptions.find({}).toArray();
         if (docs.length === 0) return;
 
-        console.log(`Background check tick: ${docs.length} subscribed user(s).`);
+        Logger.info(`Background check tick: ${docs.length} subscribed user(s).`);
 
         for (const doc of docs) {
             try {
                 await runBackgroundCheckForUser(doc);
             } catch (error) {
-                console.error('Background check user-level error:', error.message);
+                Logger.error(`Background check user-level error: ${error.message}`);
             }
             await new Promise(resolve => setTimeout(resolve, 1500));
         }
     } catch (error) {
-        console.error('Background worker failed:', error.message);
+        Logger.error(`Background worker failed: ${error.message}`);
     } finally {
         backgroundWorkerBusy = false;
     }
@@ -1280,6 +1329,8 @@ app.post('/api/login', async (req, res) => {
         return res.status(400).json({ error: 'Missing credentials' });
     }
 
+    Logger.info('Login request received', req);
+
     let browser;
     try {
         const launched = await launchBrowser();
@@ -1304,10 +1355,11 @@ app.post('/api/login', async (req, res) => {
             }
         }
 
+        Logger.info('Login successful. Returning cookies.', req);
         res.json({ success: true, cookies: currentCookies });
     } catch (error) {
         if (browser) {
-            await browser.close().catch(() => {});
+            await browser.close().catch(() => { });
         }
 
         if (error instanceof PublicHttpError && error.statusCode === 401) {
@@ -1320,7 +1372,7 @@ app.post('/api/login', async (req, res) => {
             touchLastSeen: true
         });
 
-        console.error('Login error:', error.message || error);
+        Logger.error(`Login error: ${error.message || error}`, req);
         return res.status(500).json({ error: error.message || 'Login failed' });
     }
 });
@@ -1338,6 +1390,8 @@ app.post('/api/refresh-grades', async (req, res) => {
             touchLastSeen: true
         });
     }
+
+    Logger.info('Grade refresh request received', req, username);
 
     const cookies = sanitizeCookies(req.body && req.body.cookies);
     if (!Array.isArray(cookies) || cookies.length === 0) {
@@ -1358,6 +1412,7 @@ app.post('/api/refresh-grades', async (req, res) => {
         const page = launched.page;
 
         await page.setCookie(...cookies);
+        Logger.info('Navigating to iView with session cookies...', req, username);
         await page.goto(ACADEMIC_IVIEW_URL, {
             waitUntil: 'networkidle2',
             timeout: 45000
@@ -1380,6 +1435,8 @@ app.post('/api/refresh-grades', async (req, res) => {
             });
         }
 
+        Logger.info('Session valid! Starting grade portal flow...', req, username);
+
         const sessionToken = createSession(browser, page, {
             username,
             deviceId,
@@ -1400,7 +1457,7 @@ app.post('/api/refresh-grades', async (req, res) => {
         });
     } catch (error) {
         if (browser) {
-            await browser.close().catch(() => {});
+            await browser.close().catch(() => { });
         }
 
         if (isValidIdentifier(username)) {
@@ -1411,7 +1468,7 @@ app.post('/api/refresh-grades', async (req, res) => {
             });
         }
 
-        console.error('Refresh grades error:', error.message || error);
+        Logger.error(`Refresh grades error: ${error.message || error}`, req, username);
         return res.status(500).json({ error: error.message || 'Failed to refresh grades' });
     }
 });
@@ -1443,7 +1500,7 @@ app.post('/api/solve-captcha', async (req, res) => {
             cookies: currentCookies
         });
     } catch (error) {
-        console.error('Captcha solve error:', error.message || error);
+        Logger.error(`Captcha solve error: ${error.message || error}`, req, token);
 
         if (session && session.browser && !session.browser.isConnected()) {
             await closeSession(token);
@@ -1540,7 +1597,7 @@ app.post('/api/logout', async (req, res) => {
     for (const [token, session] of SESSIONS.entries()) {
         if (!username || session.username === username) {
             if (session.browser) {
-                await session.browser.close().catch(() => {});
+                await session.browser.close().catch(() => { });
             }
             SESSIONS.delete(token);
         }
@@ -1826,19 +1883,19 @@ app.post('/api/statistics/app-open', async (req, res) => {
 
 app.listen(PORT, '0.0.0.0', async () => {
     await initMongo();
-    console.log(`Server running on 0.0.0.0:${PORT}`);
+    Logger.info(`Server running on 0.0.0.0:${PORT}`);
 });
 
 process.on('SIGINT', async () => {
     if (mongoState.client) {
-        await mongoState.client.close().catch(() => {});
+        await mongoState.client.close().catch(() => { });
     }
     process.exit(0);
 });
 
 process.on('SIGTERM', async () => {
     if (mongoState.client) {
-        await mongoState.client.close().catch(() => {});
+        await mongoState.client.close().catch(() => { });
     }
     process.exit(0);
 });

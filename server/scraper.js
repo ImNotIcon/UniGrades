@@ -254,8 +254,8 @@ const scrapeStudentInfo = async (page) => {
     });
 };
 
-async function scrapeGrades(page) {
-    console.log('Parsing grades and info...');
+async function scrapeGrades(page, token) {
+    Logger.info('Parsing grades and info...', null, token);
 
     let studentInfo = { name: '', average: '', totalCredits: '', totalGreekCredits: '' };
     let allGrades = [];
@@ -265,7 +265,7 @@ async function scrapeGrades(page) {
     for (const f of page.frames()) {
         const url = f.url();
         if (url.startsWith(targetPrefix)) {
-            console.log(`Found target frame: ${url}`);
+            Logger.info(`Found target frame: ${url}`, null, token);
 
             // Scrape info and grades from this specific frame
             const info = await scrapeStudentInfo(f);
