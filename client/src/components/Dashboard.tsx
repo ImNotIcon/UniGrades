@@ -412,11 +412,11 @@ const FilterBottomSheet: React.FC<{
                                     className={`w-full flex items-center justify-between p-5 rounded-2xl transition-all border-2 ${tempFilters[opt.id as keyof typeof tempFilters] ? 'border-indigo-500 bg-indigo-500/5' : 'border-transparent bg-gray-50 dark:bg-gray-900/50'}`}
                                 >
                                     <span className={`font-black uppercase tracking-wider ${opt.color}`}>{opt.label}</span>
-                                    {tempFilters[opt.id as keyof typeof tempFilters] && (
-                                        <div className="w-6 h-6 bg-indigo-500 rounded-full flex items-center justify-center text-white">
+                                    <div className={`w-6 h-6 rounded-full flex items-center justify-center transition-all ${tempFilters[opt.id as keyof typeof tempFilters] ? 'bg-indigo-500 text-white' : 'border-2 border-gray-200 dark:border-gray-700'}`}>
+                                        {tempFilters[opt.id as keyof typeof tempFilters] && (
                                             <X className="w-4 h-4" />
-                                        </div>
-                                    )}
+                                        )}
+                                    </div>
                                 </button>
                             ))}
                         </div>
