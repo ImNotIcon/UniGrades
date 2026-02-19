@@ -1553,6 +1553,8 @@ app.post('/api/refresh-grades', async (req, res) => {
         const deviceId = safeString(req.body && req.body.deviceId, { maxLength: 128 });
         const deviceModel = normalizeDeviceModel(req.body && req.body.deviceModel);
         const autoSolveEnabled = parseBoolean(req.body && req.body.autoSolveEnabled, true);
+        const autoSolveGloballyEnabled = process.env.DISABLE_AUTO_CAPTCHA !== 'true';
+        const canAutoSolve = autoSolveGloballyEnabled && autoSolveEnabled;
 
         if (isValidIdentifier(username)) {
             await incrementStatistics(username, { gradeRefreshCount: 1 }, {
@@ -1578,7 +1580,7 @@ app.post('/api/refresh-grades', async (req, res) => {
 
         Logger.info('Session valid! Returning placeholder session...', req, username);
 
-        const existingToken = getInFlightSessionTokenForUser(username);
+        const existingToken = canAutoSolve ? getInFlightSessionTokenForUser(username) : null;
         if (existingToken) {
             const existingSession = SESSIONS.get(existingToken);
             Logger.info(`Reusing in-flight session token ${existingToken} for ${username}.`, req, username);
@@ -1588,6 +1590,8 @@ app.post('/api/refresh-grades', async (req, res) => {
                 status: (existingSession && existingSession.status) || 'loading',
                 message: 'Refresh already in progress.'
             });
+        } else if (!canAutoSolve) {
+            Logger.info('Auto-captcha disabled (client/server); creating a fresh session without token reuse.', req, username);
         }
 
         const sessionToken = createSession(null, null, {
