@@ -108,6 +108,26 @@ async function enqueueUserTask(username, taskFn, { token = '' } = {}) {
     return current;
 }
 
+function getInFlightSessionTokenForUser(username) {
+    if (!username) return null;
+
+    const activeToken = USER_ACTIVE_SESSION.get(username);
+    if (activeToken) {
+        const activeSession = SESSIONS.get(activeToken);
+        if (activeSession && activeSession.status !== 'completed' && activeSession.status !== 'error') {
+            return activeToken;
+        }
+    }
+
+    for (const [token, session] of SESSIONS.entries()) {
+        if (!session || session.username !== username) continue;
+        if (session.status === 'completed' || session.status === 'error') continue;
+        return token;
+    }
+
+    return null;
+}
+
 
 const mongoState = {
     client: null,
@@ -1547,6 +1567,18 @@ app.post('/api/refresh-grades', async (req, res) => {
         }
 
         Logger.info('Session valid! Returning placeholder session...', req, username);
+
+        const existingToken = getInFlightSessionTokenForUser(username);
+        if (existingToken) {
+            const existingSession = SESSIONS.get(existingToken);
+            Logger.info(`Reusing in-flight session token ${existingToken} for ${username}.`, req, username);
+            return res.json({
+                success: true,
+                token: existingToken,
+                status: (existingSession && existingSession.status) || 'loading',
+                message: 'Refresh already in progress.'
+            });
+        }
 
         const sessionToken = createSession(null, null, {
             username,
