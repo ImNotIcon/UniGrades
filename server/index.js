@@ -235,21 +235,21 @@ function isExpiredPushSubscriptionError(error) {
 }
 
 function buildGradeIdentity(grade) {
-    const code = safeString(grade.code, { maxLength: 64 });
-    const year = safeString(grade.year, { maxLength: 32 });
-    const semester = safeString(grade.semester, { maxLength: 32 });
-    const session = safeString(grade.session || grade.acadSession, { maxLength: 64 });
-    return `${code}::${year}::${semester}::${session}`;
+    const code = safeString(grade.code, { maxLength: 64 }).normalize('NFC');
+    const year = safeString(grade.year, { maxLength: 32 }).normalize('NFC');
+    const semester = safeString(grade.semester, { maxLength: 32 }).normalize('NFC');
+    const session = safeString(grade.session || grade.acadSession, { maxLength: 64 }).normalize('NFC');
+    return `${code}|${year}|${semester}|${session}`;
 }
 
 function normalizeTrackedGrade(grade) {
     return {
-        code: safeString(grade.code, { maxLength: 64 }),
-        year: safeString(grade.year, { maxLength: 32 }),
-        semester: safeString(grade.semester, { maxLength: 32 }),
-        session: safeString(grade.session || grade.acadSession, { maxLength: 64 }),
-        grade: safeString(grade.grade, { maxLength: 32 }),
-        title: safeString(grade.title, { maxLength: 220 })
+        code: safeString(grade.code, { maxLength: 64 }).normalize('NFC'),
+        year: safeString(grade.year, { maxLength: 32 }).normalize('NFC'),
+        semester: safeString(grade.semester, { maxLength: 32 }).normalize('NFC'),
+        session: safeString(grade.session || grade.acadSession, { maxLength: 64 }).normalize('NFC'),
+        grade: safeString(grade.grade, { maxLength: 32 }).normalize('NFC'),
+        title: safeString(grade.title, { maxLength: 220 }).normalize('NFC')
     };
 }
 
@@ -261,7 +261,9 @@ function normalizeTrackedGrades(grades) {
 }
 
 function hasGradeValue(value) {
-    return typeof value === 'string' && value.trim() !== '';
+    if (value === null || value === undefined) return false;
+    const t = value.toString().trim();
+    return t !== '' && t !== '-';
 }
 
 function sanitizeCookies(cookies) {
@@ -1376,8 +1378,10 @@ async function runBackgroundCheckForUser(userDoc) {
 
     const updatedEntries = [];
     for (const entry of activeEntries) {
+        const lastSeenGradesRaw = entry.lastSeenGrades;
         const pushSubscription = entry.pushSubscription;
-        const trackedPrevious = normalizeTrackedGrades(entry.lastSeenGrades || []);
+        const hasPreviousData = Array.isArray(lastSeenGradesRaw) && lastSeenGradesRaw.length > 0;
+        const trackedPrevious = normalizeTrackedGrades(lastSeenGradesRaw || []);
         const previousByIdentity = new Map(trackedPrevious.map(g => [buildGradeIdentity(g), g]));
 
         const sentNotifications = Array.isArray(entry.sentNotifications) ? [...entry.sentNotifications] : [];
@@ -1390,37 +1394,41 @@ async function runBackgroundCheckForUser(userDoc) {
         let pushStillValid = true;
 
         for (const grade of currentTrackedGrades) {
-            if (!hasGradeValue(grade.grade)) continue;
+            const gradeVal = grade.grade;
+            if (!hasGradeValue(gradeVal)) continue;
 
             const identity = buildGradeIdentity(grade);
             const previous = previousByIdentity.get(identity);
-            if (!previous) continue;
-            if (previous.grade === grade.grade) continue;
 
-            const notificationKey = `${identity}::${grade.grade}`;
-            if (sentSet.has(notificationKey)) continue;
+            const isNewSubject = !previous;
+            const isChangedGrade = previous && previous.grade !== gradeVal;
 
-            if (hasVapidConfig && pushSubscription) {
-                try {
-                    await sendPushSafely(pushSubscription, {
-                        title: 'New Grade Available',
-                        body: `${grade.title || grade.code}: ${grade.grade}`,
-                        icon: '/pwa-192x192.png',
-                        badge: '/pwa-192x192.png',
-                        tag: `grade-${grade.code}`,
-                        data: { url: '/' }
-                    });
+            if (hasPreviousData && (isNewSubject || isChangedGrade)) {
+                const notificationKey = `${identity}::${gradeVal}`;
+                if (sentSet.has(notificationKey)) continue;
 
-                    sentSet.add(notificationKey);
-                    sentNotifications.push({
-                        notificationKey,
-                        sentAt: new Date()
-                    });
-                } catch (error) {
-                    Logger.error(`Push send failed for ${username}/${entry.deviceId}: ${error.message}`, null, username);
-                    if (isExpiredPushSubscriptionError(error)) {
-                        pushStillValid = false;
-                        break;
+                if (hasVapidConfig && pushSubscription) {
+                    try {
+                        await sendPushSafely(pushSubscription, {
+                            title: 'New Grade Available',
+                            body: `${grade.title || grade.code}: ${grade.grade}`,
+                            icon: '/pwa-192x192.png',
+                            badge: '/pwa-192x192.png',
+                            tag: `grade-${grade.code}`,
+                            data: { url: '/' }
+                        });
+
+                        sentSet.add(notificationKey);
+                        sentNotifications.push({
+                            notificationKey,
+                            sentAt: new Date()
+                        });
+                    } catch (error) {
+                        Logger.error(`Push send failed for ${username}/${entry.deviceId}: ${error.message}`, null, username);
+                        if (isExpiredPushSubscriptionError(error)) {
+                            pushStillValid = false;
+                            break;
+                        }
                     }
                 }
             }

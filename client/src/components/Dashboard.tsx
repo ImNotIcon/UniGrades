@@ -142,8 +142,15 @@ const HomeTab: React.FC<{
     const recentGrades = useMemo(() => {
         return [...fullHistory]
             .filter(g => !!g.dateAdded)
-            .sort((a, b) => new Date(b.dateAdded || 0).getTime() - new Date(a.dateAdded || 0).getTime())
-            .slice(0, 3);
+            .sort((a, b) => {
+                const timeA = new Date(a.dateAdded || 0).getTime();
+                const timeB = new Date(b.dateAdded || 0).getTime();
+                if (timeB !== timeA) return timeB - timeA;
+                // Fallback for same-batch updates
+                if (b.year !== a.year) return b.year.localeCompare(a.year);
+                return b.code.localeCompare(a.code);
+            })
+            .slice(0, 5); // Show up to 5 instead of 3 to be more helpful
     }, [fullHistory]);
     const donutLegendItems = useMemo(() => {
         let passed = 0;

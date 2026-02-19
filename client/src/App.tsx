@@ -42,7 +42,16 @@ const detectDeviceModel = () => {
   return `${browser} on ${os}`;
 };
 
-const gradeKey = (g: Grade) => `${g.code}-${g.year}-${g.semester}-${g.session || g.acadSession || ''}`;
+const normalizeGradeString = (s: string | undefined | null) =>
+  (s ?? '').toString().trim().normalize('NFC');
+
+const gradeKey = (g: Grade) => {
+  const code = normalizeGradeString(g.code);
+  const year = normalizeGradeString(g.year);
+  const sem = normalizeGradeString(g.semester);
+  const sess = normalizeGradeString(g.session || g.acadSession);
+  return `${code}|${year}|${sem}|${sess}`;
+};
 
 const App: React.FC = () => {
   const deviceId = useMemo(() => getOrCreateDeviceId(), []);
@@ -542,23 +551,33 @@ const App: React.FC = () => {
 
     const oldGradesMap = new Map<string, Grade>();
     grades.forEach(g => oldGradesMap.set(gradeKey(g), g));
-    const nowIso = new Date().toISOString();
 
-    const processedGrades = newGrades.map(g => {
+    const now = Date.now();
+    const hasPreviousGrades = grades.length > 0;
+
+    const processedGrades = newGrades.map((g, index) => {
       const key = gradeKey(g);
       const existing = oldGradesMap.get(key);
-      const hasValidGrade = !!(g.grade && g.grade.trim() !== '');
+      const gradeVal = normalizeGradeString(g.grade);
+      const hasMeaningfulGrade = gradeVal !== "" && gradeVal !== "-";
 
       let isNew = false;
       let dateAdded: string | null = null;
-      if (existing) {
-        if (hasValidGrade && existing.grade !== g.grade) {
+
+      if (hasPreviousGrades && hasMeaningfulGrade) {
+        const isNewSubject = !existing;
+        const isGradeDifferent = existing && normalizeGradeString(existing.grade) !== gradeVal;
+
+        if (isNewSubject || isGradeDifferent) {
           isNew = true;
-          dateAdded = nowIso;
-        } else {
-          isNew = existing.isNew || false;
-          dateAdded = existing.dateAdded || null;
+          // Add micro-offset to preserve order in "Recent" list when sync happens at once
+          dateAdded = new Date(now + (newGrades.length - index)).toISOString();
         }
+      }
+
+      if (!isNew && existing) {
+        isNew = existing.isNew || false;
+        dateAdded = existing.dateAdded || null;
       }
 
       return { ...g, isNew, dateAdded };
