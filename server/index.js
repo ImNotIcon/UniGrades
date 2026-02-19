@@ -65,6 +65,9 @@ const ALLOWED_INTERVALS = new Set([10, 30, 60, 360, 720, 1440]);
 const MAX_SUBSCRIPTIONS_PER_USER = 2;
 const INACTIVE_DEVICE_MS = 14 * 24 * 60 * 60 * 1000;
 const BACKGROUND_CHECK_TICK_MS = 60 * 1000;
+const SESSION_POLL_TIMEOUT_MS = 5000;
+const PAUSED_SESSION_TTL_MS = 60 * 1000;
+const SESSION_WATCHDOG_TICK_MS = 1000;
 
 const SESSIONS = new Map();
 const USER_QUEUES = new Map();
@@ -551,9 +554,64 @@ function createSession(browser, page, {
         deviceModel,
         autoSolveEnabled,
         manualCaptchaCounted: false,
-        lastActive: Date.now()
+        lastActive: Date.now(),
+        createdAt: Date.now(),
+        lastStatusPollAt: Date.now(),
+        paused: false,
+        pausedAt: null
     });
     return token;
+}
+
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+function touchSessionStatusPoll(token) {
+    const session = SESSIONS.get(token);
+    if (!session) return;
+    session.lastStatusPollAt = Date.now();
+    session.lastActive = Date.now();
+    if (session.paused) {
+        session.paused = false;
+        session.pausedAt = null;
+        Logger.info('Resuming paused session after status poll.', null, token);
+    }
+}
+
+async function waitIfSessionPaused(token) {
+    while (true) {
+        const session = SESSIONS.get(token);
+        if (!session) return false;
+        if (!session.paused) return true;
+        await sleep(250);
+    }
+}
+
+async function runSessionWatchdog() {
+    const now = Date.now();
+    const tokensToClose = [];
+
+    for (const [token, session] of SESSIONS.entries()) {
+        if (!session) continue;
+        if (session.status === 'completed' || session.status === 'error') continue;
+
+        const lastPoll = Number.isFinite(session.lastStatusPollAt) ? session.lastStatusPollAt : session.createdAt || now;
+        const idleMs = now - lastPoll;
+
+        if (!session.paused && idleMs > SESSION_POLL_TIMEOUT_MS) {
+            session.paused = true;
+            session.pausedAt = now;
+            Logger.warn(`Pausing session due to missing /api/status updates for ${idleMs}ms.`, null, token);
+        }
+
+        if (session.paused && session.pausedAt && (now - session.pausedAt) > PAUSED_SESSION_TTL_MS) {
+            tokensToClose.push(token);
+        }
+    }
+
+    for (const token of tokensToClose) {
+        Logger.warn('Removing paused session after TTL expiration.', null, token);
+        await closeSession(token);
+    }
 }
 
 async function closeSession(token) {
@@ -888,13 +946,16 @@ async function executeAsyncScrape(token, browser, page) {
 
     session.status = 'loading';
     try {
+        if (!(await waitIfSessionPaused(token))) return;
         let result;
         for (let attempt = 0; attempt < 3; attempt++) {
+            if (!(await waitIfSessionPaused(token))) return;
             result = await scrapeGrades(page, token);
             if (result && Array.isArray(result.grades) && result.grades.length > 0) break;
             await page.waitForFunction(() => document.querySelector('table, .urST, iframe'), { timeout: 8000 }).catch(() => { });
         }
 
+        if (!(await waitIfSessionPaused(token))) return;
         if (!result || !Array.isArray(result.grades)) {
             result = await scrapeGrades(page, token);
         }
@@ -941,16 +1002,19 @@ async function startGradePortalFlow(token, browser, page, {
     if (!session) return;
 
     try {
+        if (!(await waitIfSessionPaused(token))) return;
         if (!skipNavigation) {
             await navigateToIview(page, token);
         }
 
+        if (!(await waitIfSessionPaused(token))) return;
         const captchaFrame = await findGradesFrame(page, false, 12000, token);
         if (!captchaFrame) throw new Error('Captcha/Grades frame not found.');
 
         session.captchaFrame = captchaFrame;
 
         Logger.info('Capturing captcha element...', null, token);
+        if (!(await waitIfSessionPaused(token))) return;
         const captchaEl = await findCaptchaImage(captchaFrame, token);
         let currentCaptchaBuffer = await captchaEl.screenshot({ timeout: 60000 });
         let currentFrame = captchaFrame;
@@ -961,11 +1025,13 @@ async function startGradePortalFlow(token, browser, page, {
         if (canAutoSolve) {
             let allowSecondAttempt = false;
 
+            if (!(await waitIfSessionPaused(token))) return;
             const firstAutoText = await solveCaptcha(currentCaptchaBuffer, token);
             if (firstAutoText) {
                 Logger.info(`Auto-solving attempt 1/2: ${firstAutoText}`, null, token);
                 try {
                     Logger.info('Waiting for captcha verification result...', null, token);
+                    if (!(await waitIfSessionPaused(token))) return;
                     await submitCaptchaAndVerify(page, currentFrame, firstAutoText, token);
                     return executeAsyncScrape(token, browser, page);
                 } catch (error) {
@@ -985,17 +1051,20 @@ async function startGradePortalFlow(token, browser, page, {
             }
 
             if (allowSecondAttempt) {
+                if (!(await waitIfSessionPaused(token))) return;
                 const refreshedBuffer = await refreshCaptcha(page, currentFrame, token);
                 if (refreshedBuffer) {
                     currentCaptchaBuffer = refreshedBuffer;
                     currentFrame = getActiveFrame(page, currentFrame) || currentFrame;
                 }
 
+                if (!(await waitIfSessionPaused(token))) return;
                 const secondAutoText = await solveCaptcha(currentCaptchaBuffer, token);
                 if (secondAutoText) {
                     Logger.info(`Auto-solving attempt 2/2: ${secondAutoText}`, null, token);
                     try {
                         Logger.info('Waiting for captcha verification result...', null, token);
+                        if (!(await waitIfSessionPaused(token))) return;
                         await submitCaptchaAndVerify(page, currentFrame, secondAutoText, token);
                         return executeAsyncScrape(token, browser, page);
                     } catch (error) {
@@ -1010,6 +1079,7 @@ async function startGradePortalFlow(token, browser, page, {
                     }
                 }
 
+                if (!(await waitIfSessionPaused(token))) return;
                 const manualRefresh = await refreshCaptcha(page, currentFrame, token);
                 if (manualRefresh) {
                     currentCaptchaBuffer = manualRefresh;
@@ -1350,6 +1420,11 @@ async function runBackgroundChecks() {
 }
 
 setInterval(runBackgroundChecks, BACKGROUND_CHECK_TICK_MS);
+setInterval(() => {
+    runSessionWatchdog().catch((error) => {
+        Logger.error(`Session watchdog failed: ${error.message}`);
+    });
+}, SESSION_WATCHDOG_TICK_MS);
 
 app.get('/api/features', (req, res) => {
     const mongoEnabled = isMongoEnabled();
@@ -1488,9 +1563,11 @@ app.post('/api/refresh-grades', async (req, res) => {
                 session.browser = innerBrowser;
                 session.page = page;
 
+                if (!(await waitIfSessionPaused(sessionToken))) return;
                 await page.setCookie(...cookies);
                 Logger.info('Navigating to iView for queued session...', null, sessionToken);
 
+                if (!(await waitIfSessionPaused(sessionToken))) return;
                 await page.goto(ACADEMIC_IVIEW_URL, {
                     waitUntil: 'networkidle2',
                     timeout: 45000
@@ -1593,6 +1670,8 @@ app.get('/api/status', (req, res) => {
     if (!session) {
         return res.json({ status: 'expired' });
     }
+
+    touchSessionStatusPoll(token);
 
     if (session.status === 'completed') {
         const result = session.result;
