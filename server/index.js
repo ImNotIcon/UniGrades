@@ -68,6 +68,7 @@ const BACKGROUND_CHECK_TICK_MS = 60 * 1000;
 const SESSION_POLL_TIMEOUT_MS = 5000;
 const PAUSED_SESSION_TTL_MS = 60 * 1000;
 const SESSION_WATCHDOG_TICK_MS = 1000;
+const COMPLETED_SESSION_TTL_MS = 2000;
 
 const SESSIONS = new Map();
 const USER_QUEUES = new Map();
@@ -594,7 +595,8 @@ function createSession(browser, page, {
         createdAt: Date.now(),
         lastStatusPollAt: Date.now(),
         paused: false,
-        pausedAt: null
+        pausedAt: null,
+        completedAt: null
     });
     return token;
 }
@@ -628,7 +630,14 @@ async function runSessionWatchdog() {
 
     for (const [token, session] of SESSIONS.entries()) {
         if (!session) continue;
-        if (session.status === 'completed' || session.status === 'error') continue;
+        if (session.status === 'completed') {
+            const completedAt = Number.isFinite(session.completedAt) ? session.completedAt : now;
+            if ((now - completedAt) > COMPLETED_SESSION_TTL_MS) {
+                tokensToClose.push(token);
+            }
+            continue;
+        }
+        if (session.status === 'error') continue;
 
         const lastPoll = Number.isFinite(session.lastStatusPollAt) ? session.lastStatusPollAt : session.createdAt || now;
         const idleMs = now - lastPoll;
@@ -1003,6 +1012,7 @@ async function executeAsyncScrape(token, browser, page) {
         await browser.close();
 
         latestSession.status = 'completed';
+        latestSession.completedAt = Date.now();
         Logger.info('Async scraping completed successfully.', null, token);
         latestSession.result = {
             grades: result.grades || [],
@@ -1723,7 +1733,6 @@ app.get('/api/status', (req, res) => {
 
     if (session.status === 'completed') {
         const result = session.result;
-        SESSIONS.delete(token);
         return res.json({
             status: 'completed',
             grades: result.grades || [],

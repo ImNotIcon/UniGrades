@@ -318,7 +318,7 @@ const App: React.FC = () => {
         setLoading(false);
         setBackgroundLoading(false);
       }
-    }, 2500);
+    }, 500);
   };
 
   const sendLogoutToServer = async (usernameOverride?: string) => {
