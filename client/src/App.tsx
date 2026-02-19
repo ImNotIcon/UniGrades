@@ -161,16 +161,32 @@ const App: React.FC = () => {
   }, [selectedCourseCode]);
 
   useEffect(() => {
+    // On refresh, clear any leftovers from history state so it resets to Home
+    if (window.history.state?.course) {
+      window.history.replaceState({ ...window.history.state, course: null }, '');
+    }
+  }, []);
+
+  useEffect(() => {
     const onPopState = () => {
+      const state = window.history.state;
+      const codeFromHistory = state?.course || null;
+
+      // Safety: If code in history doesn't exist in our grades, treat as null (Home)
+      if (codeFromHistory && !grades.some(g => g.code === codeFromHistory)) {
+        setSelectedCourseCode(null);
+        return;
+      }
+
       if (!isProgrammaticBack.current) {
         setAnimateOut(false);
       }
       isProgrammaticBack.current = false;
-      setSelectedCourseCode(window.history.state?.course || null);
+      setSelectedCourseCode(codeFromHistory);
     };
     window.addEventListener('popstate', onPopState);
     return () => window.removeEventListener('popstate', onPopState);
-  }, []);
+  }, [grades]);
 
   useEffect(() => {
     if (darkMode) {

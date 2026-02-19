@@ -120,8 +120,53 @@ const NoGradePill: React.FC<{ darkMode: boolean; compact?: boolean; gauge?: bool
 
 
 
-// Logic for getting status color and other helpers
+const GradeCard: React.FC<{
+    grade: Grade;
+    darkMode: boolean;
+    onSelect: (code: string) => void;
+    scrollingRef: React.MutableRefObject<boolean>;
+    isHome?: boolean;
+}> = ({ grade, darkMode, onSelect, scrollingRef, isHome }) => {
+    const status = getGradeStatus(grade.grade);
+    const statusColor = getStatusColor(status, darkMode, true);
 
+    const bgClass = darkMode
+        ? (isHome ? 'bg-gray-900/50 border-gray-800' : 'bg-gray-800 border-gray-700')
+        : 'bg-gray-200 border-gray-300';
+
+    return (
+        <button
+            onClick={() => { if (!scrollingRef.current) onSelect(grade.code); }}
+            className={`group relative p-5 rounded-2xl border text-left transition-all duration-300 hover:shadow-lg ${bgClass} ${darkMode ? 'hover:border-gray-600' : 'hover:border-gray-400'}`}
+        >
+            <div className="flex items-center justify-between gap-4">
+                <div className="flex-1 min-w-0">
+                    <span className={`text-[10px] font-black uppercase tracking-widest ${darkMode ? 'text-gray-500' : 'text-gray-400'}`}>
+                        {grade.code}
+                    </span>
+                    <h4 className="text-base font-black leading-tight truncate mt-1">
+                        {grade.title}
+                    </h4>
+                    <div className="text-xs font-bold opacity-40 mt-1 truncate">
+                        {grade.apprStatus ? `${grade.year} | ${grade.apprStatus}` : grade.year}
+                    </div>
+                </div>
+                <div className="shrink-0 w-20 text-right relative">
+                    <div className="relative inline-block">
+                        <span className={`text-2xl font-black ${statusColor}`}>
+                            {hasVisibleGrade(grade.grade) ? grade.grade : <NoGradePill darkMode={darkMode} />}
+                        </span>
+                        {grade.isNew && (
+                            <span className="absolute -top-1 -right-2 flex h-2 w-2">
+                                <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500"></span>
+                            </span>
+                        )}
+                    </div>
+                </div>
+            </div>
+        </button>
+    );
+};
 
 // Tab components
 
@@ -238,33 +283,17 @@ const HomeTab: React.FC<{
                 {recentGrades.length === 0 ? (
                     <div className="py-12 text-center opacity-50 font-medium">No new grades yet.</div>
                 ) : (
-                    <div className="space-y-3">
-                        {recentGrades.map((g) => {
-                            const status = getGradeStatus(g.grade);
-                            const statusColor = getStatusColor(status, darkMode, true);
-                            return (
-                                <button
-                                    key={`${g.code}-${g.year}-${g.semester}`}
-                                    onClick={() => { if (!scrollingRef.current) onSelectCourse(g.code); }}
-                                    className={`p-4 rounded-2xl border text-left transition-all hover:shadow-md ${darkMode ? 'bg-gray-900/50 border-gray-700' : 'bg-gray-50 border-gray-100'}`}
-                                >
-                                    <div className="flex items-center justify-between gap-3">
-                                        <div className="min-w-0 flex-1">
-                                            <span className={`text-[10px] font-bold uppercase tracking-widest ${darkMode ? 'text-gray-500' : 'text-gray-400'}`}>{g.code}</span>
-                                            <h4 className="text-sm font-bold truncate leading-tight mt-1">{g.title}</h4>
-                                            <div className="text-xs font-semibold opacity-50 mt-1">
-                                                {g.dateAdded ? new Date(g.dateAdded).toLocaleString() : g.year}
-                                            </div>
-                                        </div>
-                                        <div className="shrink-0">
-                                            <span className={`text-lg font-black ${statusColor}`}>
-                                                {hasVisibleGrade(g.grade) ? g.grade : <NoGradePill darkMode={darkMode} compact />}
-                                            </span>
-                                        </div>
-                                    </div>
-                                </button>
-                            );
-                        })}
+                    <div className="grid grid-cols-1 gap-4">
+                        {recentGrades.map((g) => (
+                            <GradeCard
+                                key={`${g.code}-${g.year}-${g.semester}`}
+                                grade={g}
+                                darkMode={darkMode}
+                                onSelect={onSelectCourse}
+                                scrollingRef={scrollingRef}
+                                isHome
+                            />
+                        ))}
                     </div>
                 )}
             </div>
@@ -529,36 +558,15 @@ const GradesTab: React.FC<{
                         </div>
 
                         <div className="grid grid-cols-1 gap-4">
-                            {group.grades.map((g: Grade) => {
-                                const status = getGradeStatus(g.grade);
-                                const statusColor = getStatusColor(status, darkMode, true);
-                                return (
-                                    <button
-                                        key={`${g.code}-${g.year}-${g.semester}`}
-                                        onClick={() => { if (!scrollingRef.current) onSelectCourse(g.code); }}
-                                        className={`group relative p-5 rounded-2xl border text-left transition-all duration-300 hover:shadow-lg ${darkMode ? 'bg-gray-800 border-gray-700 hover:border-gray-600' : 'bg-white border-gray-100 hover:border-gray-200'}`}
-                                    >
-                                        <div className="flex items-center justify-between gap-4">
-                                            <div className="flex-1 min-w-0">
-                                                <span className={`text-[10px] font-black uppercase tracking-widest ${darkMode ? 'text-gray-500' : 'text-gray-400'}`}>
-                                                    {g.code}
-                                                </span>
-                                                <h4 className="text-base font-black leading-tight truncate mt-1">
-                                                    {g.title}
-                                                </h4>
-                                                <div className="text-xs font-bold opacity-40 mt-1 truncate">
-                                                    {g.apprStatus ? `${g.year} | ${g.apprStatus}` : g.year}
-                                                </div>
-                                            </div>
-                                            <div className="shrink-0 w-16 text-center">
-                                                <span className={`text-2xl font-black ${statusColor}`}>
-                                                    {hasVisibleGrade(g.grade) ? g.grade : <NoGradePill darkMode={darkMode} />}
-                                                </span>
-                                            </div>
-                                        </div>
-                                    </button>
-                                );
-                            })}
+                            {group.grades.map((g: Grade) => (
+                                <GradeCard
+                                    key={`${g.code}-${g.year}-${g.semester}`}
+                                    grade={g}
+                                    darkMode={darkMode}
+                                    onSelect={onSelectCourse}
+                                    scrollingRef={scrollingRef}
+                                />
+                            ))}
                         </div>
                     </div>
                 ))}
@@ -1011,137 +1019,142 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 </div>
             )}
 
-            {isDetailPage && selectedCourseData ? (
-                <CourseDetailView
-                    data={selectedCourseData}
-                    darkMode={darkMode}
-                    onSelectCourse={onSelectCourse}
-                    detailRef={detailRef}
-                    stripAccents={stripAccents}
-                    animateOut={animateOut}
-                />
-            ) : (
-                <div className={`min-h-screen transition-colors duration-300 ${darkMode ? 'bg-gray-900 text-white' : 'bg-gray-50 text-gray-900'}`}>
-                    {activeTab === 'home' && (
-                        <header className={`${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-100'} shadow-sm sticky top-0 z-40 border-b transition-colors duration-300`}>
-                            <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center">
-                                <div>
-                                    <h1 className={`text-2xl font-bold leading-tight ${darkMode ? 'text-white' : 'text-gray-900'}`}>
-                                        Hello 👋
-                                    </h1>
-                                    <p className="text-lg font-extrabold text-indigo-500">{studentInfo?.name || 'Student'}</p>
-                                </div>
-                                <div className="flex items-center gap-2">
-                                    <button
-                                        onClick={() => setSettingsOpen(true)}
-                                        className={`p-3 rounded-full transition-all ${darkMode ? 'text-gray-400 hover:text-indigo-300 hover:bg-gray-700' : 'text-gray-400 hover:text-indigo-600 hover:bg-indigo-50'}`}
-                                        title="Settings"
-                                    >
-                                        <Settings className="w-6 h-6" />
-                                    </button>
-                                    <button
-                                        onClick={onRefresh}
-                                        className={`p-3 rounded-full transition-all ${darkMode ? 'text-gray-400 hover:text-blue-400 hover:bg-gray-700' : 'text-gray-400 hover:text-blue-500 hover:bg-blue-50'} ${isLoading || isBackgroundLoading ? 'animate-spin text-blue-500' : ''}`}
-                                        title="Refresh Grades"
-                                        disabled={isLoading}
-                                    >
-                                        <RefreshCw className="w-6 h-6" />
-                                    </button>
-                                    <button
-                                        onClick={onLogout}
-                                        className={`p-3 rounded-full transition-all ${darkMode ? 'text-gray-400 hover:text-red-400 hover:bg-gray-700' : 'text-gray-400 hover:text-red-500 hover:bg-red-50'}`}
-                                        title="Logout"
-                                    >
-                                        <LogOut className="w-6 h-6" />
-                                    </button>
-                                </div>
+            <div
+                className={`min-h-screen transition-colors duration-300 ${darkMode ? 'bg-gray-900 text-white' : 'bg-gray-50 text-gray-900'} ${selectedCourseData ? 'pointer-events-none select-none' : ''}`}
+            >
+                {activeTab === 'home' && (
+                    <header className={`${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-100'} shadow-sm sticky top-0 z-40 border-b transition-colors duration-300`}>
+                        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center">
+                            <div>
+                                <h1 className={`text-2xl font-bold leading-tight ${darkMode ? 'text-white' : 'text-gray-900'}`}>
+                                    Hello 👋
+                                </h1>
+                                <p className="text-lg font-extrabold text-indigo-500">{studentInfo?.name || 'Student'}</p>
                             </div>
-                        </header>
+                            <div className="flex items-center gap-2">
+                                <button
+                                    onClick={() => setSettingsOpen(true)}
+                                    className={`p-3 rounded-full transition-all ${darkMode ? 'text-gray-400 hover:text-indigo-300 hover:bg-gray-700' : 'text-gray-400 hover:text-indigo-600 hover:bg-indigo-50'}`}
+                                    title="Settings"
+                                >
+                                    <Settings className="w-6 h-6" />
+                                </button>
+                                <button
+                                    onClick={onRefresh}
+                                    className={`p-3 rounded-full transition-all ${darkMode ? 'text-gray-400 hover:text-blue-400 hover:bg-gray-700' : 'text-gray-400 hover:text-blue-500 hover:bg-blue-50'} ${isLoading || isBackgroundLoading ? 'animate-spin text-blue-500' : ''}`}
+                                    title="Refresh Grades"
+                                    disabled={isLoading}
+                                >
+                                    <RefreshCw className="w-6 h-6" />
+                                </button>
+                                <button
+                                    onClick={onLogout}
+                                    className={`p-3 rounded-full transition-all ${darkMode ? 'text-gray-400 hover:text-red-400 hover:bg-gray-700' : 'text-gray-400 hover:text-red-500 hover:bg-red-50'}`}
+                                    title="Logout"
+                                >
+                                    <LogOut className="w-6 h-6" />
+                                </button>
+                            </div>
+                        </div>
+                    </header>
+                )}
+
+                <main className={`max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pb-28 space-y-6 ${activeTab === 'home' ? 'pt-8' : 'pt-0'}`}>
+                    {activeTab === 'home' ? (
+                        <HomeTab
+                            studentInfo={studentInfo}
+                            allGrades={allGrades}
+                            fullHistory={fullHistory}
+                            metricsData={metricsData}
+                            pieOptions={pieOptions}
+                            barChartData={barChartData}
+                            barOptions={barOptions}
+                            darkMode={darkMode}
+                            onMetricFilterSelect={(key) => {
+                                setFilters({
+                                    passed: key === 'passed',
+                                    failed: key === 'failed',
+                                    noGrade: key === 'noGrade',
+                                });
+                                setActiveTab('grades');
+                            }}
+                            onViewAll={() => setActiveTab('grades')}
+                            onSelectCourse={onSelectCourse}
+                            scrollingRef={scrollingRef}
+                        />
+                    ) : (
+                        <GradesTab
+                            allGrades={allGrades}
+                            searchTerm={searchTerm}
+                            setSearchTerm={setSearchTerm}
+                            filters={filters}
+                            onOpenFilters={() => {
+                                setFiltersTemp(filters);
+                                setIsFilterMenuOpen(true);
+                            }}
+                            onOpenSettings={() => setSettingsOpen(true)}
+                            onSelectCourse={onSelectCourse}
+                            scrollingRef={scrollingRef}
+                            darkMode={darkMode}
+                            onRefresh={onRefresh}
+                            onLogout={onLogout}
+                            isLoading={isLoading}
+                            isBackgroundLoading={isBackgroundLoading}
+                        />
                     )}
+                </main>
 
-                    <main className={`max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pb-28 space-y-6 ${activeTab === 'home' ? 'pt-8' : 'pt-0'}`}>
-                        {activeTab === 'home' ? (
-                            <HomeTab
-                                studentInfo={studentInfo}
-                                allGrades={allGrades}
-                                fullHistory={fullHistory}
-                                metricsData={metricsData}
-                                pieOptions={pieOptions}
-                                barChartData={barChartData}
-                                barOptions={barOptions}
-                                darkMode={darkMode}
-                                onMetricFilterSelect={(key) => {
-                                    setFilters({
-                                        passed: key === 'passed',
-                                        failed: key === 'failed',
-                                        noGrade: key === 'noGrade',
-                                    });
-                                    setActiveTab('grades');
-                                }}
-                                onViewAll={() => setActiveTab('grades')}
-                                onSelectCourse={onSelectCourse}
-                                scrollingRef={scrollingRef}
-                            />
-                        ) : (
-                            <GradesTab
-                                allGrades={allGrades}
-                                searchTerm={searchTerm}
-                                setSearchTerm={setSearchTerm}
-                                filters={filters}
-                                onOpenFilters={() => {
-                                    setFiltersTemp(filters);
-                                    setIsFilterMenuOpen(true);
-                                }}
-                                onOpenSettings={() => setSettingsOpen(true)}
-                                onSelectCourse={onSelectCourse}
-                                scrollingRef={scrollingRef}
-                                darkMode={darkMode}
-                                onRefresh={onRefresh}
-                                onLogout={onLogout}
-                                isLoading={isLoading}
-                                isBackgroundLoading={isBackgroundLoading}
-                            />
-                        )}
-                    </main>
-
-                    <div
-                        className={`fixed inset-x-0 bottom-0 z-40 border-t flex items-center justify-around px-6 pt-2 pb-[calc(env(safe-area-inset-bottom)+0.5rem)] transition-colors duration-300 ${darkMode ? 'bg-gray-800/95 border-gray-700' : 'bg-white/95 border-gray-100'} backdrop-blur-md`}
+                <div
+                    className={`fixed inset-x-0 bottom-0 z-40 border-t flex items-center justify-around px-6 pt-2 pb-[calc(env(safe-area-inset-bottom)+0.5rem)] transition-colors duration-300 ${darkMode ? 'bg-gray-800/95 border-gray-700' : 'bg-white/95 border-gray-100'} backdrop-blur-md`}
+                >
+                    <button
+                        onClick={() => setActiveTab('home')}
+                        className={`flex min-w-[5.5rem] flex-col items-center gap-1 px-5 py-3 rounded-xl transition-all ${activeTab === 'home' ? 'text-indigo-500' : 'text-gray-400'}`}
                     >
-                        <button
-                            onClick={() => setActiveTab('home')}
-                            className={`flex min-w-[5.5rem] flex-col items-center gap-1 px-5 py-3 rounded-xl transition-all ${activeTab === 'home' ? 'text-indigo-500' : 'text-gray-400'}`}
-                        >
-                            <Home className={`w-6 h-6 ${activeTab === 'home' ? 'fill-indigo-500/10' : ''}`} />
-                            <span className="text-[10px] font-bold uppercase tracking-wider">Home</span>
-                        </button>
-                        <button
-                            onClick={() => setActiveTab('grades')}
-                            className={`flex min-w-[5.5rem] flex-col items-center gap-1 px-5 py-3 rounded-xl transition-all ${activeTab === 'grades' ? 'text-indigo-500' : 'text-gray-400'}`}
-                        >
-                            <List className={`w-6 h-6 ${activeTab === 'grades' ? 'fill-indigo-500/10' : ''}`} />
-                            <span className="text-[10px] font-bold uppercase tracking-wider">Grades</span>
-                        </button>
-                    </div>
-
-                    <FilterBottomSheet
-                        isOpen={isFilterMenuOpen}
-                        onClose={() => setIsFilterMenuOpen(false)}
-                        tempFilters={filtersTemp}
-                        setTempFilters={setFiltersTemp}
-                        onApply={() => {
-                            setFilters(filtersTemp);
-                            setIsFilterMenuOpen(false);
-                        }}
-                        onRestore={() => {
-                            const reset = { passed: false, failed: false, noGrade: false };
-                            setFilters(reset);
-                            setFiltersTemp(reset);
-                            setIsFilterMenuOpen(false);
-                        }}
-                        darkMode={darkMode}
-                    />
+                        <Home className={`w-6 h-6 ${activeTab === 'home' ? 'fill-indigo-500/10' : ''}`} />
+                        <span className="text-[10px] font-bold uppercase tracking-wider">Home</span>
+                    </button>
+                    <button
+                        onClick={() => setActiveTab('grades')}
+                        className={`flex min-w-[5.5rem] flex-col items-center gap-1 px-5 py-3 rounded-xl transition-all ${activeTab === 'grades' ? 'text-indigo-500' : 'text-gray-400'}`}
+                    >
+                        <List className={`w-6 h-6 ${activeTab === 'grades' ? 'fill-indigo-500/10' : ''}`} />
+                        <span className="text-[10px] font-bold uppercase tracking-wider">Grades</span>
+                    </button>
                 </div>
-            )}
+
+                <FilterBottomSheet
+                    isOpen={isFilterMenuOpen}
+                    onClose={() => setIsFilterMenuOpen(false)}
+                    tempFilters={filtersTemp}
+                    setTempFilters={setFiltersTemp}
+                    onApply={() => {
+                        setFilters(filtersTemp);
+                        setIsFilterMenuOpen(false);
+                    }}
+                    onRestore={() => {
+                        const reset = { passed: false, failed: false, noGrade: false };
+                        setFilters(reset);
+                        setFiltersTemp(reset);
+                        setIsFilterMenuOpen(false);
+                    }}
+                    darkMode={darkMode}
+                />
+            </div>
+
+            <AnimatePresence>
+                {selectedCourseData && (
+                    <CourseDetailView
+                        key={`detail-${selectedCourseCode}`}
+                        data={selectedCourseData}
+                        darkMode={darkMode}
+                        onSelectCourse={onSelectCourse}
+                        detailRef={detailRef}
+                        stripAccents={stripAccents}
+                        animateOut={animateOut}
+                    />
+                )}
+            </AnimatePresence>
 
             <AnimatePresence>
                 {settingsOpen && (
@@ -1373,8 +1386,8 @@ const CourseDetailView: React.FC<{
         <motion.div
             initial={{ x: '100%' }}
             animate={{ x: 0 }}
-            exit={animateOut ? { x: '100%', transition: { type: 'tween', ease: 'easeOut', duration: 0.25 } } : undefined}
-            transition={{ type: 'spring', stiffness: 400, damping: 35 }}
+            exit={animateOut ? { x: '100%', transition: { type: 'tween', ease: 'easeIn', duration: 0.3 } } : undefined}
+            transition={{ type: 'tween', ease: 'easeOut', duration: 0.35 }}
             className="fixed inset-0 z-50 overflow-hidden"
         >
             <div ref={detailRef} className={`min-h-screen h-screen overflow-y-auto transition-colors duration-300 ${darkMode ? 'bg-gray-900 text-white' : 'bg-gray-50 text-gray-900'}`}>
@@ -1447,7 +1460,7 @@ const CourseDetailView: React.FC<{
                                 const status = getGradeStatus(h.grade);
                                 const c = getStatusColor(status, darkMode, true);
                                 return (
-                                    <div key={`${h.code}-${i}`} className={`flex justify-between items-center p-4 rounded-xl ${darkMode ? 'bg-gray-900/50' : 'bg-gray-50'}`}>
+                                    <div key={`${h.code}-${i}`} className={`flex justify-between items-center p-4 rounded-xl ${darkMode ? 'bg-gray-900/50' : 'bg-gray-200'}`}>
                                         <div className="flex-1 flex flex-col">
                                             <span className="text-sm font-bold">{h.year}</span>
                                             <span className="text-xs text-gray-500">
