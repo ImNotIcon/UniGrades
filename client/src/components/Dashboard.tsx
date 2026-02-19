@@ -1,5 +1,5 @@
 import React, { useMemo, useEffect, useState } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion, AnimatePresence, useDragControls, useMotionValue, animate } from 'framer-motion';
 import { Chart as ChartJS, ArcElement, Tooltip, Legend, CategoryScale, LinearScale, BarElement, Title, PointElement, LineElement, Filler } from 'chart.js';
 import type { ChartData, ChartOptions } from 'chart.js';
 import ChartDataLabels from 'chartjs-plugin-datalabels';
@@ -614,25 +614,138 @@ const FilterBottomSheet: React.FC<{
     onRestore: () => void;
     darkMode: boolean;
 }> = ({ isOpen, onClose, tempFilters, setTempFilters, onApply, onRestore, darkMode }) => {
+    const dragControls = useDragControls();
+    const [isSheetDragging, setIsSheetDragging] = useState(false);
+    const [isSheetClosing, setIsSheetClosing] = useState(false);
+    const sheetRef = React.useRef<HTMLDivElement>(null);
+    const sheetY = useMotionValue(typeof window !== 'undefined' ? window.innerHeight : 1000);
+    const isClosingRef = React.useRef(false);
+    const closeFallbackTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    const closeSheet = React.useCallback(() => {
+        if (isClosingRef.current) return;
+        isClosingRef.current = true;
+        setIsSheetClosing(true);
+        setIsSheetDragging(false);
+
+        const targetY = sheetRef.current?.offsetHeight || window.innerHeight;
+        animate(sheetY, targetY, {
+            type: 'tween',
+            ease: 'easeOut',
+            duration: 0.2,
+            onComplete: () => {
+                onClose();
+            },
+        });
+
+        if (closeFallbackTimerRef.current) {
+            clearTimeout(closeFallbackTimerRef.current);
+        }
+        closeFallbackTimerRef.current = setTimeout(() => {
+            onClose();
+        }, 260);
+    }, [onClose, sheetY]);
+
+    useEffect(() => {
+        if (!isSheetDragging) return;
+        const prevUserSelect = document.body.style.userSelect;
+        document.body.style.userSelect = 'none';
+        return () => {
+            document.body.style.userSelect = prevUserSelect;
+        };
+    }, [isSheetDragging]);
+
+    useEffect(() => {
+        return () => {
+            if (closeFallbackTimerRef.current) {
+                clearTimeout(closeFallbackTimerRef.current);
+            }
+            document.body.style.userSelect = '';
+        };
+    }, []);
+
+    useEffect(() => {
+        if (!isOpen) return;
+        isClosingRef.current = false;
+        setIsSheetClosing(false);
+        setIsSheetDragging(false);
+
+        if (closeFallbackTimerRef.current) {
+            clearTimeout(closeFallbackTimerRef.current);
+            closeFallbackTimerRef.current = null;
+        }
+
+        const startY = sheetRef.current?.offsetHeight || window.innerHeight;
+        sheetY.set(startY);
+        const raf = window.requestAnimationFrame(() => {
+            animate(sheetY, 0, {
+                type: 'spring',
+                damping: 25,
+                stiffness: 200,
+            });
+        });
+
+        return () => window.cancelAnimationFrame(raf);
+    }, [isOpen, sheetY]);
+
     return (
-        <AnimatePresence>
+        <AnimatePresence onExitComplete={() => {
+            isClosingRef.current = false;
+            setIsSheetClosing(false);
+            setIsSheetDragging(false);
+            if (closeFallbackTimerRef.current) {
+                clearTimeout(closeFallbackTimerRef.current);
+                closeFallbackTimerRef.current = null;
+            }
+        }}>
             {isOpen && (
                 <>
                     <motion.div
                         initial={{ opacity: 0 }}
                         animate={{ opacity: 1 }}
                         exit={{ opacity: 0 }}
-                        onClick={onClose}
-                        className="fixed inset-0 bg-black/50 z-[60] backdrop-blur-sm"
+                        onClick={closeSheet}
+                        className={`fixed inset-0 bg-black/55 z-[60] ${isSheetClosing ? 'pointer-events-none' : ''}`}
                     />
                     <motion.div
-                        initial={{ y: '100%' }}
-                        animate={{ y: 0 }}
-                        exit={{ y: '100%' }}
-                        transition={{ type: 'spring', damping: 25, stiffness: 200 }}
-                        className={`fixed bottom-0 left-0 right-0 z-[70] p-8 rounded-t-[3rem] shadow-2xl ${darkMode ? 'bg-gray-800' : 'bg-white'}`}
+                        ref={sheetRef}
+                        style={{ y: sheetY }}
+                        initial={{ y: typeof window !== 'undefined' ? window.innerHeight : 1000 }}
+                        exit={{ opacity: 1 }}
+                        drag="y"
+                        dragControls={dragControls}
+                        dragListener={false}
+                        dragDirectionLock
+                        dragConstraints={{ top: 0, bottom: 520 }}
+                        dragElastic={0}
+                        dragMomentum={false}
+                        onDragStart={() => setIsSheetDragging(true)}
+                        onDragEnd={(_event, info) => {
+                            setIsSheetDragging(false);
+                            if (isClosingRef.current) return;
+
+                            const sheetHeight = sheetRef.current?.offsetHeight || 0;
+                            const closeThreshold = sheetHeight * 0.1;
+                            if (info.offset.y > closeThreshold) {
+                                closeSheet();
+                                return;
+                            }
+
+                            animate(sheetY, 0, {
+                                type: 'spring',
+                                stiffness: 420,
+                                damping: 36,
+                                mass: 0.75,
+                            });
+                        }}
+                        className={`fixed bottom-0 left-0 right-0 z-[70] p-8 rounded-t-[3rem] shadow-2xl ${darkMode ? 'bg-gray-800' : 'bg-white'} ${isSheetClosing ? 'pointer-events-none' : ''}`}
                     >
-                        <div className="w-12 h-1.5 bg-gray-300 dark:bg-gray-700 rounded-full mx-auto mb-8 opacity-20" />
+                        <div
+                            onPointerDown={(e) => dragControls.start(e)}
+                            className="mx-[-2rem] -mt-4 mb-4 w-[calc(100%+4rem)] h-14 flex items-center justify-center cursor-grab active:cursor-grabbing touch-none select-none"
+                        >
+                            <div className="w-12 h-1.5 bg-gray-300 dark:bg-gray-700 rounded-full opacity-20" />
+                        </div>
                         <h3 className="text-xl font-black uppercase tracking-tight mb-8">Filter Grades</h3>
 
                         <div className="space-y-4 mb-10">
@@ -658,13 +771,19 @@ const FilterBottomSheet: React.FC<{
 
                         <div className="flex gap-4">
                             <button
-                                onClick={onRestore}
+                                onClick={() => {
+                                    onRestore();
+                                    closeSheet();
+                                }}
                                 className="flex-1 py-4 font-black uppercase tracking-widest text-gray-400 bg-gray-100 dark:bg-gray-700 rounded-2xl hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
                             >
                                 Reset
                             </button>
                             <button
-                                onClick={onApply}
+                                onClick={() => {
+                                    onApply();
+                                    closeSheet();
+                                }}
                                 className="flex-1 py-4 font-black uppercase tracking-widest text-white bg-indigo-500 rounded-2xl shadow-lg shadow-indigo-500/20 hover:bg-indigo-600 transition-colors"
                             >
                                 Apply
@@ -744,7 +863,20 @@ export const Dashboard: React.FC<DashboardProps> = ({
     loadingRef.current = isLoading || isBackgroundLoading;
 
     useEffect(() => {
+        if (isFilterMenuOpen) {
+            touchStartY.current = null;
+            pullRef.current = 0;
+            setPullProgress(0);
+            setIsDischarging(false);
+        }
+    }, [isFilterMenuOpen]);
+
+    useEffect(() => {
         const onTouchStart = (e: TouchEvent) => {
+            if (isFilterMenuOpen) {
+                touchStartY.current = null;
+                return;
+            }
             if (loadingRef.current || selectedRef.current) return;
             const activeRef = activeTab === 'home' ? homeScrollRef : gradesScrollRef;
             if (activeRef.current && activeRef.current.scrollTop <= 0) {
@@ -753,6 +885,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
         };
 
         const onTouchMove = (e: TouchEvent) => {
+            if (isFilterMenuOpen) return;
             if (touchStartY.current === null) return;
             const delta = e.touches[0].clientY - touchStartY.current;
             if (delta > 0) {
@@ -768,6 +901,13 @@ export const Dashboard: React.FC<DashboardProps> = ({
         };
 
         const onTouchEnd = () => {
+            if (isFilterMenuOpen) {
+                touchStartY.current = null;
+                pullRef.current = 0;
+                setPullProgress(0);
+                setIsDischarging(false);
+                return;
+            }
             if (pullRef.current >= 1) {
                 refreshRef.current();
             }
@@ -786,7 +926,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
             window.removeEventListener('touchmove', onTouchMove);
             window.removeEventListener('touchend', onTouchEnd);
         };
-    }, []);
+    }, [activeTab, isFilterMenuOpen]);
 
     const charged = pullProgress >= 1;
 
@@ -921,6 +1061,12 @@ export const Dashboard: React.FC<DashboardProps> = ({
             setFilters(nextFilters);
             setActiveTab('grades');
         },
+        onHover: (event: unknown, elements: Array<unknown>) => {
+            const target = (event as { native?: { target?: HTMLElement } })?.native?.target;
+            if (target) {
+                target.style.cursor = elements.length ? 'pointer' : 'default';
+            }
+        },
         plugins: {
             legend: { display: false },
             tooltip: {
@@ -935,6 +1081,12 @@ export const Dashboard: React.FC<DashboardProps> = ({
         maintainAspectRatio: false,
         layout: {
             padding: { top: 20, bottom: 20 }
+        },
+        onHover: (event: unknown, elements: Array<unknown>) => {
+            const target = (event as { native?: { target?: HTMLElement } })?.native?.target;
+            if (target) {
+                target.style.cursor = elements.length ? 'pointer' : 'default';
+            }
         },
         scales: {
             y: {
@@ -1173,13 +1325,11 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 setTempFilters={setFiltersTemp}
                 onApply={() => {
                     setFilters(filtersTemp);
-                    setIsFilterMenuOpen(false);
                 }}
                 onRestore={() => {
                     const reset = { passed: false, failed: false, noGrade: false };
                     setFilters(reset);
                     setFiltersTemp(reset);
-                    setIsFilterMenuOpen(false);
                 }}
                 darkMode={darkMode}
             />
@@ -1373,6 +1523,12 @@ const CourseDetailView: React.FC<{
     const lineOptions: ChartOptions<'line'> = {
         responsive: true,
         maintainAspectRatio: false,
+        onHover: (event: unknown, elements: Array<unknown>) => {
+            const target = (event as { native?: { target?: HTMLElement } })?.native?.target;
+            if (target) {
+                target.style.cursor = elements.length ? 'pointer' : 'default';
+            }
+        },
         scales: {
             y: {
                 min: -0.5,

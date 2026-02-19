@@ -785,7 +785,7 @@ const App: React.FC = () => {
             animate={{ opacity: 1, y: 0, x: '-50%' }}
             exit={{ opacity: 0, y: -20, x: '-50%' }}
             transition={{ duration: 0.2 }}
-            className="fixed top-4 left-1/2 z-[70] bg-red-50 text-red-600 px-8 py-3 min-w-[20rem] rounded-full shadow-lg border border-red-100 flex items-center justify-between gap-4 backdrop-blur-md"
+            className="fixed top-4 left-1/2 z-[70] bg-red-50 text-red-600 px-8 py-3 min-w-[20rem] rounded-full shadow-lg border border-red-100 flex items-center justify-between gap-4"
           >
             <span>⚠️</span> {error}
             <button
@@ -806,7 +806,7 @@ const App: React.FC = () => {
             animate={{ opacity: 1, y: 0, x: '-50%' }}
             exit={{ opacity: 0, y: 24, x: '-50%' }}
             transition={{ duration: 0.2 }}
-            className={`fixed bottom-6 left-1/2 z-[70] w-[95%] px-6 py-3 rounded-full shadow-lg border backdrop-blur-md ${darkMode ? 'bg-gray-800/95 text-gray-100 border-gray-700' : 'bg-gray-700/95 text-white border-gray-600'}`}
+            className={`fixed bottom-6 left-1/2 z-[70] w-[95%] px-6 py-3 rounded-full shadow-lg border ${darkMode ? 'bg-gray-800/95 text-gray-100 border-gray-700' : 'bg-gray-700/95 text-white border-gray-600'}`}
           >
             {gradesToast.message}
           </motion.div>

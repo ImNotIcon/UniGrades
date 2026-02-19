@@ -28,3 +28,46 @@ body {
   width: 100%;
   min-height: 100vh;
 }
+
+/* Mobile Safari/PWA compatibility for Tailwind backdrop utilities. */
+[class*="backdrop-blur"],
+[class*="backdrop-brightness"],
+[class*="backdrop-contrast"],
+[class*="backdrop-grayscale"],
+[class*="backdrop-hue-rotate"],
+[class*="backdrop-invert"],
+[class*="backdrop-opacity"],
+[class*="backdrop-saturate"],
+[class*="backdrop-sepia"] {
+  -webkit-backdrop-filter:
+    var(--tw-backdrop-blur, )
+    var(--tw-backdrop-brightness, )
+    var(--tw-backdrop-contrast, )
+    var(--tw-backdrop-grayscale, )
+    var(--tw-backdrop-hue-rotate, )
+    var(--tw-backdrop-invert, )
+    var(--tw-backdrop-opacity, )
+    var(--tw-backdrop-saturate, )
+    var(--tw-backdrop-sepia, );
+}
+
+/* Make interactive controls show expected desktop cursor states. */
+a[href],
+button,
+[role="button"],
+summary,
+input[type="button"],
+input[type="submit"],
+input[type="reset"],
+select,
+label[for] {
+  cursor: pointer;
+}
+
+button:disabled,
+input:disabled,
+select:disabled,
+textarea:disabled,
+[aria-disabled="true"] {
+  cursor: not-allowed;
+}
