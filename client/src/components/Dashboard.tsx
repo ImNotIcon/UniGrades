@@ -325,7 +325,8 @@ const GradesTab: React.FC<{
     onLogout: () => void;
     isLoading: boolean;
     isBackgroundLoading: boolean;
-}> = ({ allGrades, searchTerm, setSearchTerm, filters, onOpenFilters, onOpenSettings, onSelectCourse, scrollingRef, darkMode, onRefresh, onLogout, isLoading, isBackgroundLoading }) => {
+    scrollContainerRef?: React.RefObject<HTMLDivElement | null>;
+}> = ({ allGrades, searchTerm, setSearchTerm, filters, onOpenFilters, onOpenSettings, onSelectCourse, scrollingRef, darkMode, onRefresh, onLogout, isLoading, isBackgroundLoading, scrollContainerRef }) => {
     const sectionRefs = React.useRef<Record<number, HTMLDivElement | null>>({});
     const [currentSection, setCurrentSection] = useState<number | null>(null);
     const tabsContainerRef = React.useRef<HTMLDivElement>(null);
@@ -334,9 +335,11 @@ const GradesTab: React.FC<{
 
     useEffect(() => {
         if (currentSection !== null && tabsContainerRef.current) {
-            const activeBtn = tabsContainerRef.current.querySelector('[data-active="true"]');
+            const activeBtn = tabsContainerRef.current.querySelector('[data-active="true"]') as HTMLElement;
             if (activeBtn) {
-                activeBtn.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'start' });
+                const container = tabsContainerRef.current;
+                const scrollLeft = activeBtn.offsetLeft - (container.clientWidth / 2) + (activeBtn.clientWidth / 2);
+                container.scrollTo({ left: scrollLeft, behavior: 'smooth' });
             }
         }
     }, [currentSection]);
@@ -405,13 +408,21 @@ const GradesTab: React.FC<{
 
     useEffect(() => {
         const computeActiveSection = () => {
-            const scrollPos = window.scrollY + 224;
-            let bestMatch: number | null = null;
+            if (!scrollContainerRef?.current) return null;
+            const container = scrollContainerRef.current;
+            const scrollPos = container.scrollTop + 224;
+            const isAtBottom = container.clientHeight + container.scrollTop >= container.scrollHeight - 50;
+
             const orderedSections = Object.entries(sectionRefs.current)
                 .filter(([, el]) => !!el)
                 .map(([sem, el]) => ({ sem: Number(sem), top: (el as HTMLDivElement).offsetTop }))
                 .sort((a, b) => a.top - b.top);
 
+            if (isAtBottom && orderedSections.length > 0) {
+                return orderedSections[orderedSections.length - 1].sem;
+            }
+
+            let bestMatch: number | null = null;
             for (const section of orderedSections) {
                 if (section.top <= scrollPos) {
                     bestMatch = section.sem;
@@ -449,17 +460,28 @@ const GradesTab: React.FC<{
             setCurrentSection(computeActiveSection());
         };
 
-        window.addEventListener('scroll', handleScroll, { passive: true });
-        window.addEventListener('wheel', cancelAutoScrollLock, { passive: true });
-        window.addEventListener('touchstart', cancelAutoScrollLock, { passive: true });
+        const container = scrollContainerRef?.current || window;
+        container.addEventListener('scroll', handleScroll, { passive: true });
+        if (scrollContainerRef?.current) {
+            container.addEventListener('wheel', cancelAutoScrollLock, { passive: true });
+            container.addEventListener('touchstart', cancelAutoScrollLock, { passive: true });
+        } else {
+            window.addEventListener('wheel', cancelAutoScrollLock, { passive: true });
+            window.addEventListener('touchstart', cancelAutoScrollLock, { passive: true });
+        }
         handleScroll();
         return () => {
-            window.removeEventListener('scroll', handleScroll);
-            window.removeEventListener('wheel', cancelAutoScrollLock);
-            window.removeEventListener('touchstart', cancelAutoScrollLock);
+            container.removeEventListener('scroll', handleScroll);
+            if (scrollContainerRef?.current) {
+                container.removeEventListener('wheel', cancelAutoScrollLock);
+                container.removeEventListener('touchstart', cancelAutoScrollLock);
+            } else {
+                window.removeEventListener('wheel', cancelAutoScrollLock);
+                window.removeEventListener('touchstart', cancelAutoScrollLock);
+            }
             if (autoScrollReleaseTimerRef.current) clearTimeout(autoScrollReleaseTimerRef.current);
         };
-    }, []);
+    }, [scrollContainerRef]);
 
     const scrollToSemester = (sem: number) => {
         const el = sectionRefs.current[sem];
@@ -468,7 +490,8 @@ const GradesTab: React.FC<{
             autoScrollTargetRef.current = sem;
             if (autoScrollReleaseTimerRef.current) clearTimeout(autoScrollReleaseTimerRef.current);
             setCurrentSection(sem);
-            window.scrollTo({ top: offset, behavior: 'smooth' });
+            const container = scrollContainerRef?.current || window;
+            container.scrollTo({ top: offset, behavior: 'smooth' });
         }
     };
 
@@ -686,6 +709,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
     const [settingsOpen, setSettingsOpen] = useState(false);
     const scrollingRef = React.useRef(false);
     const scrollTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+    const homeScrollRef = React.useRef<HTMLDivElement>(null);
+    const gradesScrollRef = React.useRef<HTMLDivElement>(null);
 
     useEffect(() => {
         const onScroll = () => {
@@ -693,10 +718,16 @@ export const Dashboard: React.FC<DashboardProps> = ({
             if (scrollTimerRef.current) clearTimeout(scrollTimerRef.current);
             scrollTimerRef.current = setTimeout(() => {
                 scrollingRef.current = false;
-            }, 150);
+            }, 100);
         };
-        window.addEventListener('scroll', onScroll, { passive: true });
-        return () => window.removeEventListener('scroll', onScroll);
+        const h = homeScrollRef.current;
+        const g = gradesScrollRef.current;
+        h?.addEventListener('scroll', onScroll, { passive: true });
+        g?.addEventListener('scroll', onScroll, { passive: true });
+        return () => {
+            h?.removeEventListener('scroll', onScroll);
+            g?.removeEventListener('scroll', onScroll);
+        };
     }, []);
 
     // Pull-to-refresh
@@ -715,8 +746,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
     useEffect(() => {
         const onTouchStart = (e: TouchEvent) => {
             if (loadingRef.current || selectedRef.current) return;
-            const el = document.scrollingElement || document.documentElement;
-            if (el.scrollTop <= 0) {
+            const activeRef = activeTab === 'home' ? homeScrollRef : gradesScrollRef;
+            if (activeRef.current && activeRef.current.scrollTop <= 0) {
                 touchStartY.current = e.touches[0].clientY;
             }
         };
@@ -1020,9 +1051,13 @@ export const Dashboard: React.FC<DashboardProps> = ({
             )}
 
             <div
-                className={`min-h-screen transition-colors duration-300 ${darkMode ? 'bg-gray-900 text-white' : 'bg-gray-50 text-gray-900'} ${selectedCourseData ? 'pointer-events-none select-none' : ''}`}
+                className={`h-screen w-full relative overflow-hidden transition-colors duration-300 ${darkMode ? 'bg-gray-900 text-white' : 'bg-gray-50 text-gray-900'} ${selectedCourseData ? 'pointer-events-none select-none' : ''}`}
             >
-                {activeTab === 'home' && (
+                {/* Home Tab Container */}
+                <div
+                    ref={homeScrollRef}
+                    className={`absolute inset-0 overflow-y-auto pt-0 pb-28 transition-opacity duration-300 ${activeTab === 'home' ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'}`}
+                >
                     <header className={`${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-100'} shadow-sm sticky top-0 z-40 border-b transition-colors duration-300`}>
                         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center">
                             <div>
@@ -1057,10 +1092,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
                             </div>
                         </div>
                     </header>
-                )}
 
-                <main className={`max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pb-28 space-y-6 ${activeTab === 'home' ? 'pt-8' : 'pt-0'}`}>
-                    {activeTab === 'home' ? (
+                    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-8 space-y-6">
                         <HomeTab
                             studentInfo={studentInfo}
                             allGrades={allGrades}
@@ -1082,7 +1115,15 @@ export const Dashboard: React.FC<DashboardProps> = ({
                             onSelectCourse={onSelectCourse}
                             scrollingRef={scrollingRef}
                         />
-                    ) : (
+                    </div>
+                </div>
+
+                {/* Grades Tab Container */}
+                <div
+                    ref={gradesScrollRef}
+                    className={`absolute inset-0 overflow-y-auto pt-0 pb-28 transition-opacity duration-300 ${activeTab === 'grades' ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'}`}
+                >
+                    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-6">
                         <GradesTab
                             allGrades={allGrades}
                             searchTerm={searchTerm}
@@ -1100,47 +1141,48 @@ export const Dashboard: React.FC<DashboardProps> = ({
                             onLogout={onLogout}
                             isLoading={isLoading}
                             isBackgroundLoading={isBackgroundLoading}
+                            scrollContainerRef={gradesScrollRef}
                         />
-                    )}
-                </main>
-
-                <div
-                    className={`fixed inset-x-0 bottom-0 z-40 border-t flex items-center justify-around px-6 pt-2 pb-[calc(env(safe-area-inset-bottom)+0.5rem)] transition-colors duration-300 ${darkMode ? 'bg-gray-800/95 border-gray-700' : 'bg-white/95 border-gray-100'} backdrop-blur-md`}
-                >
-                    <button
-                        onClick={() => setActiveTab('home')}
-                        className={`flex min-w-[5.5rem] flex-col items-center gap-1 px-5 py-3 rounded-xl transition-all ${activeTab === 'home' ? 'text-indigo-500' : 'text-gray-400'}`}
-                    >
-                        <Home className={`w-6 h-6 ${activeTab === 'home' ? 'fill-indigo-500/10' : ''}`} />
-                        <span className="text-[10px] font-bold uppercase tracking-wider">Home</span>
-                    </button>
-                    <button
-                        onClick={() => setActiveTab('grades')}
-                        className={`flex min-w-[5.5rem] flex-col items-center gap-1 px-5 py-3 rounded-xl transition-all ${activeTab === 'grades' ? 'text-indigo-500' : 'text-gray-400'}`}
-                    >
-                        <List className={`w-6 h-6 ${activeTab === 'grades' ? 'fill-indigo-500/10' : ''}`} />
-                        <span className="text-[10px] font-bold uppercase tracking-wider">Grades</span>
-                    </button>
+                    </div>
                 </div>
-
-                <FilterBottomSheet
-                    isOpen={isFilterMenuOpen}
-                    onClose={() => setIsFilterMenuOpen(false)}
-                    tempFilters={filtersTemp}
-                    setTempFilters={setFiltersTemp}
-                    onApply={() => {
-                        setFilters(filtersTemp);
-                        setIsFilterMenuOpen(false);
-                    }}
-                    onRestore={() => {
-                        const reset = { passed: false, failed: false, noGrade: false };
-                        setFilters(reset);
-                        setFiltersTemp(reset);
-                        setIsFilterMenuOpen(false);
-                    }}
-                    darkMode={darkMode}
-                />
             </div>
+
+            <div
+                className={`fixed inset-x-0 bottom-0 z-40 border-t flex items-center justify-around px-6 pt-2 pb-[calc(env(safe-area-inset-bottom)+0.5rem)] transition-colors duration-300 ${darkMode ? 'bg-gray-800/95 border-gray-700' : 'bg-white/95 border-gray-100'} backdrop-blur-md`}
+            >
+                <button
+                    onClick={() => setActiveTab('home')}
+                    className={`flex min-w-[5.5rem] flex-col items-center gap-1 px-5 py-3 rounded-xl transition-all ${activeTab === 'home' ? 'text-indigo-500' : 'text-gray-400'}`}
+                >
+                    <Home className={`w-6 h-6 ${activeTab === 'home' ? 'fill-indigo-500/10' : ''}`} />
+                    <span className="text-[10px] font-bold uppercase tracking-wider">Home</span>
+                </button>
+                <button
+                    onClick={() => setActiveTab('grades')}
+                    className={`flex min-w-[5.5rem] flex-col items-center gap-1 px-5 py-3 rounded-xl transition-all ${activeTab === 'grades' ? 'text-indigo-500' : 'text-gray-400'}`}
+                >
+                    <List className={`w-6 h-6 ${activeTab === 'grades' ? 'fill-indigo-500/10' : ''}`} />
+                    <span className="text-[10px] font-bold uppercase tracking-wider">Grades</span>
+                </button>
+            </div>
+
+            <FilterBottomSheet
+                isOpen={isFilterMenuOpen}
+                onClose={() => setIsFilterMenuOpen(false)}
+                tempFilters={filtersTemp}
+                setTempFilters={setFiltersTemp}
+                onApply={() => {
+                    setFilters(filtersTemp);
+                    setIsFilterMenuOpen(false);
+                }}
+                onRestore={() => {
+                    const reset = { passed: false, failed: false, noGrade: false };
+                    setFilters(reset);
+                    setFiltersTemp(reset);
+                    setIsFilterMenuOpen(false);
+                }}
+                darkMode={darkMode}
+            />
 
             <AnimatePresence>
                 {selectedCourseData && (
