@@ -974,7 +974,7 @@ async function submitCaptchaAndVerify(page, captchaFrame, answer, token = null) 
 
 async function authenticatePortalLogin(page, username, password, token) {
     Logger.info('Navigating to login page...', null, token);
-    await page.goto('https://progress.upatras.gr', { waitUntil: 'domcontentloaded', timeout: 5000 });
+    await page.goto('https://progress.upatras.gr', { waitUntil: 'networkidle2', timeout: 5000 });
 
     let usernameSelector = '#inputEmail';
     const passwordSelector = '#inputPassword';
