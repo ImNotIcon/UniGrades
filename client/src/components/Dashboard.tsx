@@ -285,7 +285,11 @@ const GradesTab: React.FC<{
     onSelectCourse: (code: string | null) => void;
     scrollingRef: React.MutableRefObject<boolean>;
     darkMode: boolean;
-}> = ({ allGrades, searchTerm, setSearchTerm, filters, onOpenFilters, onOpenSettings, onSelectCourse, scrollingRef, darkMode }) => {
+    onRefresh: () => void;
+    onLogout: () => void;
+    isLoading: boolean;
+    isBackgroundLoading: boolean;
+}> = ({ allGrades, searchTerm, setSearchTerm, filters, onOpenFilters, onOpenSettings, onSelectCourse, scrollingRef, darkMode, onRefresh, onLogout, isLoading, isBackgroundLoading }) => {
     const sectionRefs = React.useRef<Record<number, HTMLDivElement | null>>({});
     const [currentSection, setCurrentSection] = useState<number | null>(null);
     const tabsContainerRef = React.useRef<HTMLDivElement>(null);
@@ -439,8 +443,25 @@ const GradesTab: React.FC<{
                     <h2 className="text-2xl font-black uppercase tracking-tight">Grades</h2>
                     <div className="flex items-center gap-2">
                         <button
+                            onClick={onRefresh}
+                            className={`p-2 rounded-xl transition-all ${darkMode ? 'text-gray-400 hover:text-blue-400 hover:bg-gray-800' : 'text-gray-400 hover:text-blue-500 hover:bg-blue-50'} ${isLoading || isBackgroundLoading ? 'animate-spin text-blue-500' : ''}`}
+                            title="Refresh Grades"
+                            disabled={isLoading}
+                        >
+                            <RefreshCw className="w-5 h-5" />
+                        </button>
+                        <button
+                            onClick={onLogout}
+                            className={`p-2 rounded-xl transition-all ${darkMode ? 'text-gray-400 hover:text-red-400 hover:bg-gray-800' : 'text-gray-400 hover:text-red-500 hover:bg-red-50'}`}
+                            title="Logout"
+                        >
+                            <LogOut className="w-5 h-5" />
+                        </button>
+                        <div className={`w-px h-6 mx-1 ${darkMode ? 'bg-gray-700' : 'bg-gray-200'}`}></div>
+                        <button
                             onClick={onOpenFilters}
                             className={`p-2 rounded-xl transition-all ${Object.values(filters).some(Boolean) ? 'bg-indigo-500 text-white' : 'bg-gray-100 dark:bg-gray-800 text-gray-400'}`}
+                            title="Filters"
                         >
                             <Filter className="w-5 h-5" />
                         </button>
@@ -1068,6 +1089,10 @@ export const Dashboard: React.FC<DashboardProps> = ({
                                 onSelectCourse={onSelectCourse}
                                 scrollingRef={scrollingRef}
                                 darkMode={darkMode}
+                                onRefresh={onRefresh}
+                                onLogout={onLogout}
+                                isLoading={isLoading}
+                                isBackgroundLoading={isBackgroundLoading}
                             />
                         )}
                     </main>
@@ -1161,7 +1186,7 @@ const GradeGauge: React.FC<{ grade: string; statusColor: string; darkMode: boole
 
     return (
         <div className={`relative ${containerClass} flex items-center justify-center`}>
-                <div
+            <div
                 className="absolute rounded-full pointer-events-none"
                 style={{
                     left: '50%',
@@ -1436,7 +1461,7 @@ const CourseDetailView: React.FC<{
                         </div>
                     </div>
                 </main>
-                            </div>
+            </div>
         </motion.div>
     );
 };

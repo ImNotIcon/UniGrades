@@ -321,16 +321,6 @@ const App: React.FC = () => {
     }, 500);
   };
 
-  const sendLogoutToServer = async (usernameOverride?: string) => {
-    const username = usernameOverride || activeUsername || localStorage.getItem('up_user') || '';
-    if (!username) return;
-
-    try {
-      await axios.post(`${API_URL}/logout`, { username, deviceId });
-    } catch {
-      // no-op
-    }
-  };
 
   const clearLocalSession = () => {
     setToken(null);
@@ -343,26 +333,39 @@ const App: React.FC = () => {
     setLoading(false);
     setBackgroundLoading(false);
 
-    localStorage.removeItem('up_grades');
-    localStorage.removeItem('up_studentInfo');
-    localStorage.removeItem('up_user');
-    localStorage.removeItem('up_pass');
-    localStorage.removeItem('up_session_cookies');
-    localStorage.removeItem('push_enabled');
+    // Clear all unigrades related keys
+    const keysToRemove = [
+      'up_grades',
+      'up_studentInfo',
+      'up_user',
+      'up_pass',
+      'up_session_cookies',
+      'up_raw_headers',
+      'up_offline_opens',
+      'push_enabled'
+    ];
+    keysToRemove.forEach(k => localStorage.removeItem(k));
   };
 
-  const handleLogout = async () => {
-    await sendLogoutToServer();
-
-    try {
-      const registration = await navigator.serviceWorker?.ready;
-      const subscription = await registration?.pushManager?.getSubscription();
-      if (subscription) await subscription.unsubscribe();
-    } catch {
-      // no-op
-    }
-
+  const handleLogout = (usernameOverride?: string) => {
+    // Clear local state immediately for instant UI feedback
+    const usernameToLogout = usernameOverride || activeUsername || localStorage.getItem('up_user') || '';
     clearLocalSession();
+
+    // Perform cleanup tasks in the background
+    (async () => {
+      if (usernameToLogout) {
+        try {
+          await axios.post(`${API_URL}/logout`, { username: usernameToLogout, deviceId });
+        } catch { /* ignore */ }
+      }
+
+      try {
+        const registration = await navigator.serviceWorker?.ready;
+        const subscription = await registration?.pushManager?.getSubscription();
+        if (subscription) await subscription.unsubscribe();
+      } catch { /* ignore */ }
+    })();
   };
 
   const handleLogin = async ({
@@ -432,15 +435,7 @@ const App: React.FC = () => {
         errorMsg.includes('Unknown username') ||
         errorMsg.includes('Invalid credentials')
       )) {
-        await sendLogoutToServer(username);
-
-        localStorage.removeItem('up_user');
-        localStorage.removeItem('up_pass');
-        localStorage.removeItem('up_session_cookies');
-        setHasCredentials(false);
-        setActiveUsername('');
-        setSessionPasswordBase64(null);
-        setToken(null);
+        handleLogout(username);
       }
 
       if (!isAuto) {
@@ -542,6 +537,9 @@ const App: React.FC = () => {
   };
 
   const processAndSetData = (newGrades: Grade[], newInfo: StudentInfo, headers?: string[]) => {
+    // Prevent data restore if user logged out while request was in flight
+    if (!localStorage.getItem('up_user') && !activeUsername) return;
+
     const oldGradesMap = new Map<string, Grade>();
     grades.forEach(g => oldGradesMap.set(gradeKey(g), g));
     const nowIso = new Date().toISOString();
