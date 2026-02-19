@@ -164,7 +164,7 @@ const HomeTab: React.FC<{
 
     return (
         <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-            <div className="grid grid-cols-1 md:grid-cols-5 gap-6">
+            <div className="grid grid-cols-1 md:grid-cols-6 gap-6">
                 <div className="space-y-6 col-span-1 md:col-span-3">
                     <div className={`rounded-3xl shadow-sm border p-6 relative overflow-hidden transition-colors duration-300 flex flex-col items-center justify-center ${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-100'}`}>
                         <GradeGauge grade={studentInfo?.average || ''} statusColor="text-indigo-500" darkMode={darkMode} size="medium" />
@@ -188,9 +188,9 @@ const HomeTab: React.FC<{
                     </div>
                 </div>
 
-                <div className={`rounded-3xl shadow-sm border p-6 flex flex-col items-center justify-center col-span-1 md:col-span-2 relative overflow-hidden transition-colors duration-300 ${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-100'}`}>
+                <div className={`rounded-3xl shadow-sm border p-6 flex flex-col items-center justify-center col-span-1 md:col-span-3 relative overflow-hidden transition-colors duration-300 ${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-100'}`}>
                     <div className="w-full h-64 relative z-10 flex items-stretch gap-4">
-                        <div className="w-52 md:w-56 h-full shrink-0">
+                        <div className="w-60 md:w-64 h-full shrink-0">
                             <Doughnut
                                 data={metricsData as ChartData<'doughnut', number[], string>}
                                 options={pieOptions as ChartOptions<'doughnut'>}
@@ -205,9 +205,9 @@ const HomeTab: React.FC<{
                                 >
                                     <div className="flex items-center gap-2">
                                         <span className={`inline-block w-2.5 h-2.5 rounded-full ${item.dotClass}`} />
-                                        <span className={`text-sm ${darkMode ? 'text-gray-200' : 'text-gray-700'}`}>{item.label}</span>
+                                        <span className={`text-base ${darkMode ? 'text-gray-200' : 'text-gray-700'}`}>{item.label}</span>
                                     </div>
-                                    <div className={`pl-4 text-base font-bold ${darkMode ? 'text-white' : 'text-gray-900'}`}>{item.value}</div>
+                                    <div className={`pl-4 text-xl font-bold ${darkMode ? 'text-white' : 'text-gray-900'}`}>{item.value}</div>
                                 </button>
                             ))}
                         </div>
@@ -1147,7 +1147,12 @@ const GradeGauge: React.FC<{ grade: string; statusColor: string; darkMode: boole
     const viewBox = isSmall ? '0 0 160 160' : isMedium ? '0 0 280 280' : '0 0 350 350';
     const center = isSmall ? 80 : isMedium ? 140 : 175;
     const strokeW = isSmall ? 8 : isMedium ? 18 : 22;
-    const textSize = isSmall ? 'text-4xl' : isMedium ? 'text-4xl' : 'text-7xl';
+    const textSize = isSmall ? 'text-4xl' : isMedium ? 'text-6xl' : 'text-7xl';
+    const gradeLabelSize = isSmall
+        ? 'text-[11px] mt-2 tracking-[0.24em] mr-[-0.24em]'
+        : isMedium
+            ? 'text-[14px] mt-2.5 tracking-[0.26em] mr-[-0.26em]'
+            : 'text-[15px] mt-3 tracking-[0.3em] mr-[-0.3em]';
     const nsRingRadius = radius - strokeW - 4; // Inside the gauge
     const bgInset = isSmall ? 8 : isMedium ? 10 : 12;
 
@@ -1228,7 +1233,7 @@ const GradeGauge: React.FC<{ grade: string; statusColor: string; darkMode: boole
                     <NoGradePill darkMode={darkMode} gauge />
                 )}
                 {isNumber && (
-                    <span className={`text-[15px] font-black uppercase tracking-[0.3em] mt-3 mr-[-0.3em] ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+                    <span className={`${gradeLabelSize} font-black uppercase ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>
                         {(isSmall || isMedium) ? 'AVG' : 'Grade'}
                     </span>
                 )}

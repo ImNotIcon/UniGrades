@@ -87,6 +87,8 @@ const App: React.FC = () => {
 
   const authAttempted = useRef(false);
   const isProgrammaticBack = useRef(false);
+  const loginInFlightRef = useRef(false);
+  const refreshKickoffRef = useRef(false);
 
   const [darkMode, setDarkMode] = useState(() => {
     const stored = localStorage.getItem('theme');
@@ -376,6 +378,9 @@ const App: React.FC = () => {
     isBackground?: boolean;
     remember?: boolean;
   }) => {
+    if (loginInFlightRef.current) return;
+    loginInFlightRef.current = true;
+
     if (isBackground) {
       setBackgroundLoading(true);
     } else {
@@ -417,6 +422,7 @@ const App: React.FC = () => {
 
         refreshGrades(true);
       }
+      loginInFlightRef.current = false;
     } catch (err: unknown) {
       const httpErr = err as { response?: { data?: { error?: string }; status?: number } };
       const errorMsg = httpErr.response?.data?.error || 'Login failed. Please check credentials.';
@@ -444,6 +450,7 @@ const App: React.FC = () => {
       setIsAutoLoggingIn(false);
       setLoading(false);
       setBackgroundLoading(false);
+      loginInFlightRef.current = false;
 
       if (!navigator.onLine) {
         if (grades.length > 0) {
@@ -458,15 +465,19 @@ const App: React.FC = () => {
   };
 
   const refreshGrades = async (isBackground = false) => {
+    if (refreshKickoffRef.current) return;
     if (loading || backgroundLoading) return;
+    refreshKickoffRef.current = true;
 
     const storedCookies = localStorage.getItem('up_session_cookies');
     if (!storedCookies) {
       const storedUser = localStorage.getItem('up_user');
       const storedPass = localStorage.getItem('up_pass');
       if (storedUser && storedPass) {
+        refreshKickoffRef.current = false;
         return handleLogin({ username: storedUser, pass: atob(storedPass), isAuto: true, isBackground, remember: true });
       }
+      refreshKickoffRef.current = false;
       await handleLogout();
       setError('No session cookies. Please login first.');
       return;
@@ -493,6 +504,7 @@ const App: React.FC = () => {
         setToken(res.data.token);
         pollStatus(res.data.token);
       }
+      refreshKickoffRef.current = false;
     } catch (err: unknown) {
       const httpErr = err as { response?: { data?: { error?: string; expired?: boolean }; status?: number } };
       if (httpErr.response?.status === 401 && httpErr.response?.data?.expired) {
@@ -501,9 +513,11 @@ const App: React.FC = () => {
 
         if (storedUser && storedPass) {
           localStorage.removeItem('up_session_cookies');
+          refreshKickoffRef.current = false;
           return handleLogin({ username: storedUser, pass: atob(storedPass), isAuto: true, isBackground, remember: true });
         }
 
+        refreshKickoffRef.current = false;
         await handleLogout();
         setError('Session expired. Please login again.');
         return;
@@ -522,6 +536,7 @@ const App: React.FC = () => {
       setIsAutoLoggingIn(false);
       setLoading(false);
       setBackgroundLoading(false);
+      refreshKickoffRef.current = false;
     }
   };
 
