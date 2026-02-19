@@ -1216,7 +1216,7 @@ async function unifiedIviewFlow(token, browser, page, {
 
         session.status = 'manual_captcha';
         session.captchaImage = `data:image/png;base64,${currentCaptchaBuffer.toString('base64')}`;
-        session.message = canAutoSolve ? 'Auto-solve failed. Please solve manually.' : 'Please solve captcha manually.';
+        session.message = canAutoSolve ? 'Auto-solve failed. Please solve the captcha manually.' : 'Please solve the captcha manually.';
 
         if (!session.manualCaptchaCounted) {
             session.manualCaptchaCounted = true;

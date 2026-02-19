@@ -99,6 +99,8 @@ const App: React.FC = () => {
   const isProgrammaticBack = useRef(false);
   const loginInFlightRef = useRef(false);
   const refreshKickoffRef = useRef(false);
+  const pollIntervalRef = useRef<number | null>(null);
+  const sessionVersionRef = useRef(0);
 
   const [darkMode, setDarkMode] = useState(() => {
     const stored = localStorage.getItem('theme');
@@ -303,13 +305,33 @@ const App: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const stopPolling = () => {
+    if (pollIntervalRef.current !== null) {
+      window.clearInterval(pollIntervalRef.current);
+      pollIntervalRef.current = null;
+    }
+  };
+
+  useEffect(() => {
+    return () => stopPolling();
+  }, []);
+
   const pollStatus = async (pollToken: string) => {
-    const interval = setInterval(async () => {
+    stopPolling();
+    const requestVersion = sessionVersionRef.current;
+
+    const interval = window.setInterval(async () => {
+      if (requestVersion !== sessionVersionRef.current) {
+        stopPolling();
+        return;
+      }
+
       try {
         const res = await axios.get(`${API_URL}/status?token=${pollToken}`);
+        if (requestVersion !== sessionVersionRef.current) return;
 
         if (res.data.status === 'completed') {
-          clearInterval(interval);
+          stopPolling();
 
           if (res.data.cookies) {
             localStorage.setItem('up_session_cookies', JSON.stringify(res.data.cookies));
@@ -319,19 +341,19 @@ const App: React.FC = () => {
           setLoading(false);
           setBackgroundLoading(false);
         } else if (res.data.status === 'manual_captcha') {
-          clearInterval(interval);
+          stopPolling();
           setCaptchaImage(res.data.captchaImage);
           setCaptchaMessage(res.data.message);
           if (res.data.token) setToken(res.data.token);
           setLoading(false);
           setBackgroundLoading(false);
         } else if (res.data.status === 'error') {
-          clearInterval(interval);
+          stopPolling();
           setError(res.data.error || 'Sync failed.');
           setLoading(false);
           setBackgroundLoading(false);
         } else if (res.data.status === 'expired') {
-          clearInterval(interval);
+          stopPolling();
           setCaptchaImage(null);
           setToken(null);
           setLoading(false);
@@ -340,11 +362,14 @@ const App: React.FC = () => {
           setError('Session expired.');
         }
       } catch {
-        clearInterval(interval);
+        if (requestVersion !== sessionVersionRef.current) return;
+        stopPolling();
         setLoading(false);
         setBackgroundLoading(false);
       }
     }, 500);
+
+    pollIntervalRef.current = interval;
   };
 
 
@@ -374,6 +399,10 @@ const App: React.FC = () => {
   };
 
   const handleLogout = (usernameOverride?: string) => {
+    sessionVersionRef.current += 1;
+    stopPolling();
+    refreshKickoffRef.current = false;
+
     // Clear local state immediately for instant UI feedback
     const usernameToLogout = usernameOverride || activeUsername || localStorage.getItem('up_user') || '';
     clearLocalSession();
@@ -407,6 +436,7 @@ const App: React.FC = () => {
     isBackground?: boolean;
     remember?: boolean;
   }) => {
+    const requestVersion = sessionVersionRef.current;
     if (loginInFlightRef.current) return;
     loginInFlightRef.current = true;
 
@@ -426,6 +456,10 @@ const App: React.FC = () => {
         deviceId,
         deviceModel,
       });
+      if (requestVersion !== sessionVersionRef.current) {
+        loginInFlightRef.current = false;
+        return;
+      }
 
       if (res.data.success) {
         setHasCredentials(true);
@@ -453,6 +487,11 @@ const App: React.FC = () => {
       }
       loginInFlightRef.current = false;
     } catch (err: unknown) {
+      if (requestVersion !== sessionVersionRef.current) {
+        loginInFlightRef.current = false;
+        return;
+      }
+
       const httpErr = err as { response?: { data?: { error?: string }; status?: number } };
       const errorMsg = httpErr.response?.data?.error || 'Login failed. Please check credentials.';
 
@@ -486,6 +525,7 @@ const App: React.FC = () => {
   };
 
   const refreshGrades = async (isBackground = false) => {
+    const requestVersion = sessionVersionRef.current;
     if (refreshKickoffRef.current) return;
     if (loading || backgroundLoading) return;
     refreshKickoffRef.current = true;
@@ -521,6 +561,10 @@ const App: React.FC = () => {
         deviceModel,
         autoSolveEnabled,
       });
+      if (requestVersion !== sessionVersionRef.current) {
+        refreshKickoffRef.current = false;
+        return;
+      }
 
       if (res.data.token) {
         setToken(res.data.token);
@@ -528,6 +572,11 @@ const App: React.FC = () => {
       }
       refreshKickoffRef.current = false;
     } catch (err: unknown) {
+      if (requestVersion !== sessionVersionRef.current) {
+        refreshKickoffRef.current = false;
+        return;
+      }
+
       const httpErr = err as { response?: { data?: { error?: string; expired?: boolean }; status?: number } };
       if (httpErr.response?.status === 401 && httpErr.response?.data?.expired) {
         const storedUser = localStorage.getItem('up_user');
@@ -616,16 +665,19 @@ const App: React.FC = () => {
   };
 
   const handleRefreshCaptcha = async (): Promise<void> => {
+    const requestVersion = sessionVersionRef.current;
     if (!token) return;
     setLoading(true);
     setCaptchaMessage(undefined);
 
     try {
       const res = await axios.post(`${API_URL}/refresh-captcha`, { token });
+      if (requestVersion !== sessionVersionRef.current) return;
       if (res.data.captchaImage) {
         setCaptchaImage(res.data.captchaImage);
       }
     } catch (err: unknown) {
+      if (requestVersion !== sessionVersionRef.current) return;
       const httpErr = err as { response?: { data?: { error?: string }; status?: number } };
       if (httpErr.response?.status === 404 || httpErr.response?.data?.error === 'Session expired') {
         setCaptchaImage(null);
@@ -636,11 +688,13 @@ const App: React.FC = () => {
       }
       setError('Failed to refresh captcha.');
     } finally {
+      if (requestVersion !== sessionVersionRef.current) return;
       setLoading(false);
     }
   };
 
   const handleCaptchaSolve = async (answer: string) => {
+    const requestVersion = sessionVersionRef.current;
     if (!token) return;
 
     setLoading(true);
@@ -648,6 +702,7 @@ const App: React.FC = () => {
 
     try {
       const res = await axios.post(`${API_URL}/solve-captcha`, { token, answer });
+      if (requestVersion !== sessionVersionRef.current) return;
 
       if (res.data.status === 'loading') {
         if (res.data.cookies) {
@@ -666,6 +721,7 @@ const App: React.FC = () => {
         setLoading(false);
       }
     } catch (err: unknown) {
+      if (requestVersion !== sessionVersionRef.current) return;
       const httpErr = err as { response?: { data?: { error?: string; captchaImage?: string }; status?: number } };
       if (httpErr.response?.status === 404 || httpErr.response?.data?.error === 'Session expired') {
         setCaptchaImage(null);
