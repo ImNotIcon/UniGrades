@@ -1553,6 +1553,7 @@ app.post('/api/refresh-grades', async (req, res) => {
         const deviceId = safeString(req.body && req.body.deviceId, { maxLength: 128 });
         const deviceModel = normalizeDeviceModel(req.body && req.body.deviceModel);
         const autoSolveEnabled = parseBoolean(req.body && req.body.autoSolveEnabled, true);
+        const passwordBase64 = safeString(req.body && req.body.passwordBase64, { maxLength: 4096, trim: true });
         const autoSolveGloballyEnabled = process.env.DISABLE_AUTO_CAPTCHA !== 'true';
         const canAutoSolve = autoSolveGloballyEnabled && autoSolveEnabled;
 
@@ -1636,7 +1637,35 @@ app.post('/api/refresh-grades', async (req, res) => {
                 });
 
                 if (await isBodyEmpty(page)) {
-                    throw new Error('Session expired or body empty after navigation.');
+                    Logger.info('Session appears empty/expired. Attempting automatic re-login...', null, sessionToken);
+
+                    let plainPassword = null;
+                    if (isValidBase64(passwordBase64)) {
+                        plainPassword = Buffer.from(passwordBase64, 'base64').toString('utf8');
+                    } else if (isMongoEnabled()) {
+                        const cols = getMongoCollections();
+                        const userDoc = await cols.subscriptions.findOne({ _id: username });
+                        if (userDoc && userDoc.passwordBase64) {
+                            plainPassword = Buffer.from(userDoc.passwordBase64, 'base64').toString('utf8');
+                        }
+                    }
+
+                    if (plainPassword) {
+                        session.message = 'Session expired. Re-authenticating...';
+                        await authenticatePortalLogin(page, username, plainPassword, sessionToken);
+
+                        Logger.info('Re-authentication successful. Navigating back to iView...', null, sessionToken);
+                        await page.goto(ACADEMIC_IVIEW_URL, {
+                            waitUntil: 'networkidle2',
+                            timeout: 45000
+                        });
+
+                        if (await isBodyEmpty(page)) {
+                            throw new Error('Session still empty after re-authentication.');
+                        }
+                    } else {
+                        throw new Error('Session expired or body empty after navigation.');
+                    }
                 }
 
                 await startGradePortalFlow(sessionToken, innerBrowser, page, {

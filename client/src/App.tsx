@@ -274,7 +274,7 @@ const App: React.FC = () => {
         handleLogin({ username: storedUser, pass: atob(storedPass), isAuto: true, isBackground: true, remember: true });
       }
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const pollStatus = async (pollToken: string) => {
@@ -495,6 +495,7 @@ const App: React.FC = () => {
       const res = await axios.post(`${API_URL}/refresh-grades`, {
         cookies: JSON.parse(storedCookies),
         username,
+        passwordBase64: getPasswordBase64(),
         deviceId,
         deviceModel,
         autoSolveEnabled,
