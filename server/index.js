@@ -974,7 +974,7 @@ async function submitCaptchaAndVerify(page, captchaFrame, answer, token = null) 
 
 async function authenticatePortalLogin(page, username, password, token) {
     Logger.info('Navigating to login page...', null, token);
-    await page.goto('https://progress.upatras.gr');
+    await page.goto('https://progress.upatras.gr', { waitUntil: 'domcontentloaded', timeout: 5000 });
 
     let usernameSelector = '#inputEmail';
     const passwordSelector = '#inputPassword';
@@ -1671,11 +1671,23 @@ app.post('/api/solve-captcha', async (req, res) => {
         }
 
         const isWrong = isIncorrectCaptchaError(error);
+        if (isWrong) {
+            await incrementStatistics(session.username, { incorrectCaptchaCount: 1 }, session);
+
+            const refreshedBuffer = await refreshCaptcha(session.page, session.captchaFrame, token);
+            if (refreshedBuffer) {
+                return res.status(400).json({
+                    error: error.message || 'Incorrect captcha code. Please try again.',
+                    captchaImage: `data:image/png;base64,${refreshedBuffer.toString('base64')}`
+                });
+            }
+        }
+
         return apiErrorHandler(req, res, error, {
             ...session,
             token,
             context: 'Captcha solve error',
-            statsIncrements: isWrong ? { incorrectCaptchaCount: 1 } : { failedRefreshCountCaptcha: 1 }
+            statsIncrements: isWrong ? {} : { failedRefreshCountCaptcha: 1 }
         });
     }
 });
@@ -1733,7 +1745,7 @@ app.post('/api/refresh-captcha', async (req, res) => {
 
     await incrementStatistics(session.username, { captchaRefreshCount: 1 }, session);
 
-    const buffer = await refreshCaptcha(session.page, session.captchaFrame);
+    const buffer = await refreshCaptcha(session.page, session.captchaFrame, token);
     if (!buffer) {
         return res.status(500).json({ error: 'Failed to refresh captcha' });
     }

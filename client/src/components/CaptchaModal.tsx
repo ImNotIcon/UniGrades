@@ -8,10 +8,12 @@ interface CaptchaModalProps {
     onCancel: () => void;
     onRefresh: () => void;
     message?: string;
+    resetSeq?: number;
 }
 
-export const CaptchaModal: React.FC<CaptchaModalProps & { isLoading?: boolean }> = ({ imageSrc, onSolve, onCancel, onRefresh, message, isLoading = false }) => {
+export const CaptchaModal: React.FC<CaptchaModalProps & { isLoading?: boolean }> = ({ imageSrc, onSolve, onCancel, onRefresh, message, resetSeq = 0, isLoading = false }) => {
     const [answer, setAnswer] = useState('');
+    const inputRef = React.useRef<HTMLInputElement>(null);
 
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();
@@ -27,6 +29,11 @@ export const CaptchaModal: React.FC<CaptchaModalProps & { isLoading?: boolean }>
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
     }, [onCancel, isLoading]);
+
+    React.useEffect(() => {
+        setAnswer('');
+        inputRef.current?.focus();
+    }, [resetSeq]);
 
     return (
         <motion.div
@@ -114,6 +121,7 @@ export const CaptchaModal: React.FC<CaptchaModalProps & { isLoading?: boolean }>
 
                     <form onSubmit={handleSubmit} className="space-y-4">
                         <input
+                            ref={inputRef}
                             type="text"
                             value={answer}
                             onChange={(e) => setAnswer(e.target.value)}

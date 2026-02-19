@@ -76,6 +76,7 @@ const App: React.FC = () => {
   const [token, setToken] = useState<string | null>(null);
   const [captchaImage, setCaptchaImage] = useState<string | null>(null);
   const [captchaMessage, setCaptchaMessage] = useState<string | undefined>(undefined);
+  const [captchaResetSeq, setCaptchaResetSeq] = useState(0);
   const [selectedCourseCode, setSelectedCourseCode] = useState<string | null>(null);
   const courseOpenLockRef = React.useRef<string | null>(null);
   const [animateOut, setAnimateOut] = useState(false);
@@ -665,7 +666,7 @@ const App: React.FC = () => {
         setLoading(false);
       }
     } catch (err: unknown) {
-      const httpErr = err as { response?: { data?: { error?: string }; status?: number } };
+      const httpErr = err as { response?: { data?: { error?: string; captchaImage?: string }; status?: number } };
       if (httpErr.response?.status === 404 || httpErr.response?.data?.error === 'Session expired') {
         setCaptchaImage(null);
         setToken(null);
@@ -673,7 +674,12 @@ const App: React.FC = () => {
       }
 
       setError(httpErr.response?.data?.error || 'Verification failed. Please try again.');
-      await handleRefreshCaptcha();
+      setCaptchaResetSeq((v) => v + 1);
+      if (httpErr.response?.data?.captchaImage) {
+        setCaptchaImage(httpErr.response.data.captchaImage);
+      } else {
+        await handleRefreshCaptcha();
+      }
       setLoading(false);
     }
   };
@@ -742,6 +748,7 @@ const App: React.FC = () => {
                 onCancel={handleCancelCaptcha}
                 onRefresh={handleRefreshCaptcha}
                 message={captchaMessage}
+                resetSeq={captchaResetSeq}
                 isLoading={loading}
               />
             )}
