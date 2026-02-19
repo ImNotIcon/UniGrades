@@ -71,20 +71,36 @@ const SESSION_WATCHDOG_TICK_MS = 1000;
 
 const SESSIONS = new Map();
 const USER_QUEUES = new Map();
+const USER_ACTIVE_SESSION = new Map();
 let backgroundWorkerBusy = false;
 
 /**
  * Ensures only one active grade refresh per user is running.
  */
-async function enqueueUserTask(username, taskFn) {
+async function enqueueUserTask(username, taskFn, { token = '' } = {}) {
     if (!username) return taskFn();
 
     const previous = USER_QUEUES.get(username) || Promise.resolve();
-    const current = previous.catch(() => { }).then(async () => {
+    const activeToken = USER_ACTIVE_SESSION.get(username);
+    const activeSession = activeToken ? SESSIONS.get(activeToken) : null;
+    const shouldBypassPaused = !!(activeToken && activeToken !== token && activeSession && activeSession.paused);
+
+    if (shouldBypassPaused) {
+        Logger.info(`Bypassing paused session ${activeToken.slice(0, 8)} for newer session ${token.slice(0, 8)}.`, null, username);
+    }
+
+    const base = shouldBypassPaused ? Promise.resolve() : previous;
+    const current = base.catch(() => { }).then(async () => {
+        if (token) {
+            USER_ACTIVE_SESSION.set(username, token);
+        }
         return await taskFn();
     }).finally(() => {
         if (USER_QUEUES.get(username) === current) {
             USER_QUEUES.delete(username);
+        }
+        if (token && USER_ACTIVE_SESSION.get(username) === token) {
+            USER_ACTIVE_SESSION.delete(username);
         }
     });
 
@@ -1593,7 +1609,7 @@ app.post('/api/refresh-grades', async (req, res) => {
                     touchLastSeen: true
                 });
             }
-        });
+        }, { token: sessionToken });
     } catch (error) {
         if (isValidIdentifier(username)) {
             await incrementStatistics(username, { failedRefreshCount: 1 }, {
