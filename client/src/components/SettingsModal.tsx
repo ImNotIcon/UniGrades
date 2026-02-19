@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Bell, BellOff, Trash2, X, Loader2 } from 'lucide-react';
+import { Bell, BellOff, Trash2, X, Loader2, Moon, Sun } from 'lucide-react';
 
 interface DeviceEntry {
     deviceId: string;
@@ -13,8 +13,10 @@ interface SettingsModalProps {
     onClose: () => void;
     apiUrl: string;
     darkMode: boolean;
+    onToggleTheme: () => void;
     mongoEnabled: boolean;
     pushEnabled: boolean;
+    autoSolveAvailable: boolean;
     username: string;
     deviceId: string;
     deviceModel: string;
@@ -57,8 +59,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     onClose,
     apiUrl,
     darkMode,
+    onToggleTheme,
     mongoEnabled,
     pushEnabled,
+    autoSolveAvailable,
     username,
     deviceId,
     deviceModel,
@@ -76,10 +80,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     const [consentAccepted, setConsentAccepted] = useState(false);
 
     const canUsePush = useMemo(() => supportsPush(), []);
+    const pushSettingsAvailable = mongoEnabled && pushEnabled;
+
     const loadSettings = async () => {
         if (!isOpen) return;
 
-        if (!mongoEnabled || !username) {
+        if (!pushSettingsAvailable || !username) {
             setNotifEnabled(false);
             setHasSubscriptionDoc(false);
             setDevices([]);
@@ -118,7 +124,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     useEffect(() => {
         loadSettings();
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [isOpen, mongoEnabled, username, deviceId]);
+    }, [isOpen, pushSettingsAvailable, username, deviceId]);
 
     const getOrCreateBrowserSubscription = async () => {
         const registration = await navigator.serviceWorker.ready;
@@ -159,7 +165,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     pushSubscription: browserSub.toJSON(),
                     checkIntervalMinutes: intervalMinutes,
                     consentAccepted: consent,
-                    autoSolveEnabled: true,
+                    autoSolveEnabled,
                 }),
             });
 
@@ -180,8 +186,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     };
 
     const handleEnableNotifications = async () => {
-        if (!mongoEnabled) return;
-        if (!pushEnabled) {
+        if (!pushSettingsAvailable) {
             window.alert('Push notifications are not configured on this server.');
             return;
         }
@@ -294,7 +299,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     const handleIntervalChange = async (next: number) => {
         setIntervalMinutes(next);
 
-        if (!hasSubscriptionDoc || !mongoEnabled || !username) {
+        if (!hasSubscriptionDoc || !pushSettingsAvailable || !username) {
             return;
         }
 
@@ -359,28 +364,48 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     <div className={`rounded-2xl p-4 border ${darkMode ? 'border-gray-700 bg-gray-800/60' : 'border-gray-100 bg-gray-50'}`}>
                         <div className="flex items-center justify-between gap-4">
                             <div>
-                                <p className="text-sm font-bold uppercase tracking-wider opacity-60">Auto Solve</p>
-                                <p className="text-sm opacity-80">Required for push notifications.</p>
+                                <p className="text-sm font-bold uppercase tracking-wider opacity-60">Theme</p>
+                                <p className="text-sm opacity-80">Switch between light and dark mode.</p>
                             </div>
 
-                            <label className="inline-flex items-center cursor-pointer">
-                                <input
-                                    type="checkbox"
-                                    className="sr-only"
-                                    checked={autoSolveEnabled}
-                                    onChange={(e) => handleAutoSolveToggle(e.target.checked)}
-                                    disabled={saving}
-                                />
-                                <div className={`w-12 h-7 rounded-full transition ${autoSolveEnabled ? 'bg-indigo-600' : 'bg-gray-400'} relative`}>
-                                    <span className={`absolute top-1 left-1 w-5 h-5 bg-white rounded-full transition ${autoSolveEnabled ? 'translate-x-5' : ''}`} />
-                                </div>
-                            </label>
+                            <button
+                                onClick={onToggleTheme}
+                                disabled={saving}
+                                className={`px-4 py-2 rounded-xl text-sm font-bold transition flex items-center gap-2 ${darkMode ? 'bg-gray-700 text-gray-100 hover:bg-gray-600' : 'bg-white text-gray-700 border border-gray-200 hover:bg-gray-100'}`}
+                            >
+                                {darkMode ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+                                {darkMode ? 'Light' : 'Dark'}
+                            </button>
                         </div>
                     </div>
 
-                    {!mongoEnabled ? (
+                    {autoSolveAvailable && (
+                        <div className={`rounded-2xl p-4 border ${darkMode ? 'border-gray-700 bg-gray-800/60' : 'border-gray-100 bg-gray-50'}`}>
+                            <div className="flex items-center justify-between gap-4">
+                                <div>
+                                    <p className="text-sm font-bold uppercase tracking-wider opacity-60">Auto Solve</p>
+                                    <p className="text-sm opacity-80">Required for push notifications.</p>
+                                </div>
+
+                                <label className="inline-flex items-center cursor-pointer">
+                                    <input
+                                        type="checkbox"
+                                        className="sr-only"
+                                        checked={autoSolveEnabled}
+                                        onChange={(e) => handleAutoSolveToggle(e.target.checked)}
+                                        disabled={saving}
+                                    />
+                                    <div className={`w-12 h-7 rounded-full transition ${autoSolveEnabled ? 'bg-indigo-600' : 'bg-gray-400'} relative`}>
+                                        <span className={`absolute top-1 left-1 w-5 h-5 bg-white rounded-full transition ${autoSolveEnabled ? 'translate-x-5' : ''}`} />
+                                    </div>
+                                </label>
+                            </div>
+                        </div>
+                    )}
+
+                    {!pushSettingsAvailable ? (
                         <div className={`rounded-2xl p-4 border text-sm ${darkMode ? 'border-gray-700 bg-gray-800/60 text-gray-300' : 'border-gray-100 bg-gray-50 text-gray-600'}`}>
-                            Server-side notifications and statistics are disabled because MongoDB is not configured.
+                            Push notification settings are hidden because MongoDB and VAPID push configuration are not both available on this server.
                         </div>
                     ) : (
                         <>

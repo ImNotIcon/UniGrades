@@ -22,4 +22,5 @@ export interface Grade {
     greekCredits?: string;
     evalMethod?: string;
     isNew?: boolean;
+    dateAdded?: string | null;
 }

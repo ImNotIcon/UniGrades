@@ -53,6 +53,7 @@ const App: React.FC = () => {
     mongoEnabled: false,
     pushEnabled: false,
     vapidAvailable: false,
+    autoSolveAvailable: false,
   });
 
   const [autoSolveEnabled, setAutoSolveEnabledState] = useState(() => {
@@ -67,6 +68,7 @@ const App: React.FC = () => {
   const [captchaImage, setCaptchaImage] = useState<string | null>(null);
   const [captchaMessage, setCaptchaMessage] = useState<string | undefined>(undefined);
   const [selectedCourseCode, setSelectedCourseCode] = useState<string | null>(null);
+  const courseOpenLockRef = React.useRef<string | null>(null);
   const [animateOut, setAnimateOut] = useState(false);
 
   const [grades, setGrades] = useState<Grade[]>(() => {
@@ -116,6 +118,10 @@ const App: React.FC = () => {
     if (selectedCourseCode === code) return;
 
     if (code) {
+      // Ignore additional open requests while a course is opening/open.
+      if (selectedCourseCode || courseOpenLockRef.current) return;
+      courseOpenLockRef.current = code;
+
       const updatedGrades = grades.map(g => (
         g.code === code ? { ...g, isNew: false } : g
       ));
@@ -131,7 +137,6 @@ const App: React.FC = () => {
       } else {
         window.history.pushState({ course: code }, '');
       }
-      document.body.style.overflow = 'hidden';
       setSelectedCourseCode(code);
     } else {
       setAnimateOut(true);
@@ -139,6 +144,10 @@ const App: React.FC = () => {
       window.history.back();
     }
   }, [selectedCourseCode, grades]);
+
+  useEffect(() => {
+    courseOpenLockRef.current = selectedCourseCode;
+  }, [selectedCourseCode]);
 
   useEffect(() => {
     const onPopState = () => {
@@ -179,11 +188,18 @@ const App: React.FC = () => {
           mongoEnabled: !!res.data?.mongoEnabled,
           pushEnabled: !!res.data?.pushEnabled,
           vapidAvailable: !!res.data?.vapidAvailable,
+          autoSolveAvailable: !!res.data?.autoSolveAvailable,
         });
       })
       .catch(() => {
         if (!mounted) return;
-        setFeatures({ loaded: true, mongoEnabled: false, pushEnabled: false, vapidAvailable: false });
+        setFeatures({
+          loaded: true,
+          mongoEnabled: false,
+          pushEnabled: false,
+          vapidAvailable: false,
+          autoSolveAvailable: false,
+        });
       });
 
     return () => {
@@ -512,6 +528,7 @@ const App: React.FC = () => {
   const processAndSetData = (newGrades: Grade[], newInfo: StudentInfo, headers?: string[]) => {
     const oldGradesMap = new Map<string, Grade>();
     grades.forEach(g => oldGradesMap.set(gradeKey(g), g));
+    const nowIso = new Date().toISOString();
 
     const processedGrades = newGrades.map(g => {
       const key = gradeKey(g);
@@ -519,15 +536,18 @@ const App: React.FC = () => {
       const hasValidGrade = !!(g.grade && g.grade.trim() !== '');
 
       let isNew = false;
+      let dateAdded: string | null = null;
       if (existing) {
         if (hasValidGrade && existing.grade !== g.grade) {
           isNew = true;
+          dateAdded = nowIso;
         } else {
           isNew = existing.isNew || false;
+          dateAdded = existing.dateAdded || null;
         }
       }
 
-      return { ...g, isNew };
+      return { ...g, isNew, dateAdded };
     });
 
     setGrades(processedGrades);
@@ -700,6 +720,7 @@ const App: React.FC = () => {
             passwordBase64={getPasswordBase64()}
             mongoEnabled={features.mongoEnabled}
             pushEnabled={features.pushEnabled}
+            autoSolveAvailable={features.autoSolveAvailable}
           />
         </>
       )}

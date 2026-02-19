@@ -113,6 +113,7 @@ if (process.env.BROWSER_PATH) {
 }
 
 const hasVapidConfig = !!(process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY);
+const hasGeminiConfig = !!(process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY.trim());
 if (hasVapidConfig) {
     webpush.setVapidDetails(
         process.env.VAPID_EMAIL || 'mailto:admin@example.com',
@@ -1355,7 +1356,8 @@ app.get('/api/features', (req, res) => {
     res.json({
         mongoEnabled,
         pushEnabled: mongoEnabled && hasVapidConfig,
-        vapidAvailable: hasVapidConfig
+        vapidAvailable: hasVapidConfig,
+        autoSolveAvailable: hasGeminiConfig
     });
 });
 
