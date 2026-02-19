@@ -132,7 +132,7 @@ const GradeCard: React.FC<{
 
     const bgClass = darkMode
         ? (isHome ? 'bg-gray-900/50 border-gray-800' : 'bg-gray-800 border-gray-700')
-        : 'bg-gray-200 border-gray-300';
+        : 'bg-gray-100 border-gray-200';
 
     return (
         <button
@@ -1338,13 +1338,14 @@ const CourseDetailView: React.FC<{
     animateOut: boolean;
 }> = ({ data, darkMode, onSelectCourse, detailRef, stripAccents, animateOut }) => {
     const { latest, history } = data;
+    const historyLabels = history.map(h => h.year);
     const historyScores = history.map(h => {
         const v = parseFloat((h.grade || '').replace(',', '.'));
         return Number.isNaN(v) ? null : v;
     });
 
     const lineData = {
-        labels: history.map(h => h.year.split('-')[1] || h.year),
+        labels: historyLabels,
         datasets: [{
             data: historyScores,
             borderColor: '#6366f1',
@@ -1414,11 +1415,14 @@ const CourseDetailView: React.FC<{
                 padding: { top: 10, bottom: 10, left: 12, right: 12 },
                 cornerRadius: 8,
                 callbacks: {
-                    title: (items) => items[0]?.label || '',
-                    label: (context) => {
-                        const v = context.parsed.y;
-                        return typeof v === 'number' ? `Score ${v.toFixed(2)}` : 'No grade';
+                    title: (items) => {
+                        const idx = items[0]?.dataIndex ?? -1;
+                        if (idx < 0) return '';
+                        const gradeValue = history[idx]?.grade;
+                        const gradeText = hasVisibleGrade(gradeValue) ? gradeValue : 'No grade';
+                        return `${historyLabels[idx]} | ${gradeText}`;
                     },
+                    label: () => '',
                 },
             },
         },
@@ -1486,7 +1490,7 @@ const CourseDetailView: React.FC<{
                     </div>
 
                     <div className={`p-6 rounded-2xl border transition-colors duration-300 ${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-100'}`}>
-                        <h3 className="text-sm font-black uppercase tracking-widest mb-4 opacity-50">Score History</h3>
+                        <h3 className="text-sm font-black uppercase tracking-widest mb-4 opacity-50">Grade History</h3>
                         <div className="h-[250px]">
                             <Line
                                 data={lineData}
@@ -1502,7 +1506,7 @@ const CourseDetailView: React.FC<{
                                 const status = getGradeStatus(h.grade);
                                 const c = getStatusColor(status, darkMode, true);
                                 return (
-                                    <div key={`${h.code}-${i}`} className={`flex justify-between items-center p-4 rounded-xl ${darkMode ? 'bg-gray-900/50' : 'bg-gray-200'}`}>
+                                    <div key={`${h.code}-${i}`} className={`flex justify-between items-center p-4 rounded-xl ${darkMode ? 'bg-gray-900/50' : 'bg-gray-100'}`}>
                                         <div className="flex-1 flex flex-col">
                                             <span className="text-sm font-bold">{h.year}</span>
                                             <span className="text-xs text-gray-500">

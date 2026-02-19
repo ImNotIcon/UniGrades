@@ -114,6 +114,7 @@ const App: React.FC = () => {
   const [backgroundLoading, setBackgroundLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isAutoLoggingIn, setIsAutoLoggingIn] = useState(false);
+  const [gradesToast, setGradesToast] = useState<{ id: number; message: string } | null>(null);
 
   const setAutoSolveEnabled = (value: boolean) => {
     setAutoSolveEnabledState(value);
@@ -207,6 +208,12 @@ const App: React.FC = () => {
       return () => clearTimeout(timer);
     }
   }, [error]);
+
+  useEffect(() => {
+    if (!gradesToast) return;
+    const timer = setTimeout(() => setGradesToast(null), 3000);
+    return () => clearTimeout(timer);
+  }, [gradesToast]);
 
   useEffect(() => {
     let mounted = true;
@@ -620,6 +627,7 @@ const App: React.FC = () => {
 
     const now = Date.now();
     const hasPreviousGrades = grades.length > 0;
+    let newGradesCount = 0;
 
     const processedGrades = newGrades.map((g, index) => {
       const key = gradeKey(g);
@@ -636,6 +644,7 @@ const App: React.FC = () => {
 
         if (isNewSubject || isGradeDifferent) {
           isNew = true;
+          newGradesCount += 1;
           // Add micro-offset to preserve order in "Recent" list when sync happens at once
           dateAdded = new Date(now + (newGrades.length - index)).toISOString();
         }
@@ -662,6 +671,13 @@ const App: React.FC = () => {
     setIsAutoLoggingIn(false);
     setLoading(false);
     setBackgroundLoading(false);
+
+    setGradesToast({
+      id: now,
+      message: newGradesCount > 0
+        ? `You have ${newGradesCount} new grade${newGradesCount === 1 ? '' : 's'}.`
+        : 'You have no new grades.',
+    });
   };
 
   const handleRefreshCaptcha = async (): Promise<void> => {
@@ -778,6 +794,21 @@ const App: React.FC = () => {
             >
               ×
             </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {gradesToast && (
+          <motion.div
+            key={gradesToast.id}
+            initial={{ opacity: 0, y: 24, x: '-50%' }}
+            animate={{ opacity: 1, y: 0, x: '-50%' }}
+            exit={{ opacity: 0, y: 24, x: '-50%' }}
+            transition={{ duration: 0.2 }}
+            className={`fixed bottom-6 left-1/2 z-[70] w-[95%] px-6 py-3 rounded-full shadow-lg border backdrop-blur-md ${darkMode ? 'bg-gray-800/95 text-gray-100 border-gray-700' : 'bg-gray-700/95 text-white border-gray-600'}`}
+          >
+            {gradesToast.message}
           </motion.div>
         )}
       </AnimatePresence>
