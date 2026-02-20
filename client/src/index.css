@@ -51,6 +51,22 @@ body {
     var(--tw-backdrop-sepia, );
 }
 
+/* PullToRefresh layer tuning for nested mobile scroll containers. */
+.ug-ptr--ptr {
+  background: transparent;
+  box-shadow: none;
+}
+
+.ug-ptr--icon,
+.ug-ptr--text {
+  color: rgba(107, 114, 128, 0.85);
+}
+
+.dark .ug-ptr--icon,
+.dark .ug-ptr--text {
+  color: rgba(156, 163, 175, 0.9);
+}
+
 /* Make interactive controls show expected desktop cursor states. */
 a[href],
 button,

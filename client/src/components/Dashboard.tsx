@@ -5,6 +5,7 @@ import type { ChartData, ChartOptions } from 'chart.js';
 import ChartDataLabels from 'chartjs-plugin-datalabels';
 import { Doughnut, Bar, Line } from 'react-chartjs-2';
 import { LogOut, RefreshCw, Settings, Home, List, Search, Filter, X, ChevronRight, ArrowLeft } from 'lucide-react';
+import PullToRefresh, { type PullToRefreshInstance } from 'pulltorefreshjs';
 import type { Grade, StudentInfo } from '../types';
 import { SettingsModal } from './SettingsModal';
 
@@ -830,6 +831,17 @@ export const Dashboard: React.FC<DashboardProps> = ({
     const scrollTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
     const homeScrollRef = React.useRef<HTMLDivElement>(null);
     const gradesScrollRef = React.useRef<HTMLDivElement>(null);
+    const refreshRef = React.useRef(onRefresh);
+    refreshRef.current = onRefresh;
+    const loadingRef = React.useRef(isLoading || isBackgroundLoading);
+    loadingRef.current = isLoading || isBackgroundLoading;
+    const activeTabRef = React.useRef(activeTab);
+    activeTabRef.current = activeTab;
+    const filterMenuOpenRef = React.useRef(isFilterMenuOpen);
+    filterMenuOpenRef.current = isFilterMenuOpen;
+    const selectedCourseRef = React.useRef(selectedCourseCode);
+    selectedCourseRef.current = selectedCourseCode;
+    const ptrInstanceRef = React.useRef<PullToRefreshInstance | null>(null);
 
     useEffect(() => {
         const onScroll = () => {
@@ -849,86 +861,42 @@ export const Dashboard: React.FC<DashboardProps> = ({
         };
     }, []);
 
-    // Pull-to-refresh
-    const PULL_THRESHOLD = 80;
-    const [pullProgress, setPullProgress] = React.useState(0);
-    const [isDischarging, setIsDischarging] = React.useState(false);
-    const touchStartY = React.useRef<number | null>(null);
-    const pullRef = React.useRef(0);
-    const selectedRef = React.useRef(selectedCourseCode);
-    selectedRef.current = selectedCourseCode;
-    const refreshRef = React.useRef(onRefresh);
-    refreshRef.current = onRefresh;
-    const loadingRef = React.useRef(isLoading || isBackgroundLoading);
-    loadingRef.current = isLoading || isBackgroundLoading;
-
     useEffect(() => {
-        if (isFilterMenuOpen) {
-            touchStartY.current = null;
-            pullRef.current = 0;
-            setPullProgress(0);
-            setIsDischarging(false);
-        }
-    }, [isFilterMenuOpen]);
+        if (ptrInstanceRef.current) return;
 
-    useEffect(() => {
-        const onTouchStart = (e: TouchEvent) => {
-            if (isFilterMenuOpen) {
-                touchStartY.current = null;
-                return;
-            }
-            if (loadingRef.current || selectedRef.current) return;
-            const activeRef = activeTab === 'home' ? homeScrollRef : gradesScrollRef;
-            if (activeRef.current && activeRef.current.scrollTop <= 0) {
-                touchStartY.current = e.touches[0].clientY;
-            }
-        };
+        const instance = PullToRefresh.init({
+            classPrefix: 'ug-ptr--',
+            mainElement: '#dashboard-scroll-shell',
+            triggerElement: '#dashboard-scroll-shell',
+            distThreshold: 72,
+            distMax: 96,
+            distReload: 56,
+            refreshTimeout: 320,
+            instructionsPullToRefresh: 'Pull down to refresh',
+            instructionsReleaseToRefresh: 'Release to refresh',
+            instructionsRefreshing: 'Refreshing...',
+            shouldPullToRefresh: () => {
+                if (loadingRef.current) return false;
+                if (filterMenuOpenRef.current) return false;
+                if (selectedCourseRef.current) return false;
 
-        const onTouchMove = (e: TouchEvent) => {
-            if (isFilterMenuOpen) return;
-            if (touchStartY.current === null) return;
-            const delta = e.touches[0].clientY - touchStartY.current;
-            if (delta > 0) {
-                const dampened = Math.min(delta * 0.5, PULL_THRESHOLD * 1.4);
-                const progress = dampened / PULL_THRESHOLD;
-                pullRef.current = progress;
-                setIsDischarging(false);
-                setPullProgress(progress);
-            } else {
-                pullRef.current = 0;
-                setPullProgress(0);
-            }
-        };
+                const activeScroller = activeTabRef.current === 'home'
+                    ? homeScrollRef.current
+                    : gradesScrollRef.current;
 
-        const onTouchEnd = () => {
-            if (isFilterMenuOpen) {
-                touchStartY.current = null;
-                pullRef.current = 0;
-                setPullProgress(0);
-                setIsDischarging(false);
-                return;
-            }
-            if (pullRef.current >= 1) {
-                refreshRef.current();
-            }
-            touchStartY.current = null;
-            pullRef.current = 0;
-            setIsDischarging(true);
-            setPullProgress(0);
-        };
+                if (!activeScroller) return false;
+                return activeScroller.scrollTop <= 0;
+            },
+            onRefresh: () => Promise.resolve(refreshRef.current()),
+        });
 
-        window.addEventListener('touchstart', onTouchStart, { passive: true });
-        window.addEventListener('touchmove', onTouchMove, { passive: true });
-        window.addEventListener('touchend', onTouchEnd);
+        ptrInstanceRef.current = instance;
 
         return () => {
-            window.removeEventListener('touchstart', onTouchStart);
-            window.removeEventListener('touchmove', onTouchMove);
-            window.removeEventListener('touchend', onTouchEnd);
+            PullToRefresh.destroyAll();
+            ptrInstanceRef.current = null;
         };
-    }, [activeTab, isFilterMenuOpen]);
-
-    const charged = pullProgress >= 1;
+    }, []);
 
     const selectedCourseData = useMemo(() => {
         if (!selectedCourseCode) return null;
@@ -1159,56 +1127,17 @@ export const Dashboard: React.FC<DashboardProps> = ({
         }
     };
 
-
-
-
-
-    const isDetailPage = !!(selectedCourseCode && selectedCourseData);
-
     return (
         <>
-            {!isDetailPage && (
-                <div
-                    className="fixed left-1/2 z-[60] pointer-events-none flex flex-col items-center justify-center transition-all duration-200"
-                    style={{
-                        top: 0,
-                        transform: `translateX(-50%) translateY(${-48 + Math.min(pullProgress, 1.5) * 80}px) scale(${pullProgress > 0 ? 1 : 0.8})`,
-                        opacity: pullProgress > 0 ? Math.min(pullProgress * 2, 1) : 0,
-                        transition: isDischarging ? 'transform 0.4s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.3s ease-out' : 'none',
-                    }}
-                    onTransitionEnd={() => setIsDischarging(false)}
-                >
-                    <svg
-                        className={`w-8 h-8 text-gray-400 dark:text-gray-500 ${charged || isDischarging ? 'animate-spin' : ''}`}
-                        viewBox="0 0 24 24"
-                        style={{
-                            transform: (!charged && !isDischarging) ? `rotate(${Math.min(pullProgress, 1) * 120}deg)` : undefined,
-                            transition: (!charged && !isDischarging) ? 'transform 0.1s linear' : 'none',
-                            filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.1))'
-                        }}
-                    >
-                        {Array.from({ length: 12 }).map((_, i) => (
-                            <line
-                                key={i}
-                                x1="12" y1="2" x2="12" y2="6"
-                                stroke="currentColor"
-                                strokeWidth="2"
-                                strokeLinecap="round"
-                                transform={`rotate(${i * 30} 12 12)`}
-                                style={{ opacity: 1 - (i / 12) }}
-                            />
-                        ))}
-                    </svg>
-                </div>
-            )}
-
             <div
+                id="dashboard-scroll-shell"
                 className={`h-screen w-full relative overflow-hidden transition-colors duration-300 ${darkMode ? 'bg-gray-900 text-white' : 'bg-gray-50 text-gray-900'} ${selectedCourseData ? 'pointer-events-none select-none' : ''}`}
             >
                 {/* Home Tab Container */}
                 <div
+                    id="dashboard-home-scroll"
                     ref={homeScrollRef}
-                    className={`absolute inset-0 overflow-y-auto pt-0 pb-28 transition-opacity duration-300 ${activeTab === 'home' ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'}`}
+                    className={`absolute inset-0 overflow-y-auto [-webkit-overflow-scrolling:touch] pt-0 pb-28 transition-opacity duration-300 ${activeTab === 'home' ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'}`}
                 >
                     <header className={`${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-100'} shadow-sm sticky top-0 z-40 border-b transition-colors duration-300`}>
                         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center">
@@ -1272,8 +1201,9 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
                 {/* Grades Tab Container */}
                 <div
+                    id="dashboard-grades-scroll"
                     ref={gradesScrollRef}
-                    className={`absolute inset-0 overflow-y-auto pt-0 pb-28 transition-opacity duration-300 ${activeTab === 'grades' ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'}`}
+                    className={`absolute inset-0 overflow-y-auto [-webkit-overflow-scrolling:touch] pt-0 pb-28 transition-opacity duration-300 ${activeTab === 'grades' ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'}`}
                 >
                     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-6">
                         <GradesTab
