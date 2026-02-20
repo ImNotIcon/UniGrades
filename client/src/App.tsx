@@ -217,7 +217,10 @@ const App: React.FC = () => {
 
   useEffect(() => {
     let mounted = true;
-    axios.get(`${API_URL}/features`)
+    const featureUsername = activeUsername || localStorage.getItem('up_user') || '';
+    axios.get(`${API_URL}/features`, {
+      params: featureUsername ? { username: featureUsername } : undefined,
+    })
       .then(res => {
         if (!mounted) return;
         setFeatures({
@@ -242,7 +245,7 @@ const App: React.FC = () => {
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [activeUsername]);
 
   useEffect(() => {
     if (!features.mongoEnabled) return;

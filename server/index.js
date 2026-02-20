@@ -154,6 +154,29 @@ if (process.env.BROWSER_PATH) {
 
 const hasVapidConfig = !!(process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY);
 const hasGeminiConfig = !!(process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY.trim());
+const isAutoSolveWhitelistEnabled = ['1', 'true', 'yes', 'on'].includes(
+    (process.env.AUTOSOLVE_USERNAME_WHITELIST_ENABLED || '').trim().toLowerCase()
+);
+const autoSolveWhitelist = new Set(
+    (process.env.AUTOSOLVE_USERNAME_WHITELIST || '')
+        .split(',')
+        .map(v => (typeof v === 'string' ? v.trim().toLowerCase() : ''))
+        .filter(v => !!v)
+);
+const isAutoSolveWhitelistActive = isAutoSolveWhitelistEnabled && autoSolveWhitelist.size > 0;
+
+function normalizeUsernameForWhitelist(value) {
+    if (typeof value !== 'string') return '';
+    return value.trim().slice(0, 128).toLowerCase();
+}
+
+function isUsernameAllowedForAutoSolveAndPush(username) {
+    const normalized = normalizeUsernameForWhitelist(username);
+    if (!normalized) return false;
+    if (!isAutoSolveWhitelistEnabled) return true;
+    return autoSolveWhitelist.has(normalized);
+}
+
 if (hasVapidConfig) {
     webpush.setVapidDetails(
         process.env.VAPID_EMAIL || 'mailto:admin@example.com',
@@ -1163,7 +1186,9 @@ async function unifiedIviewFlow(token, browser, page, {
         let currentFrame = captchaFrame;
 
         const autoSolveGloballyEnabled = process.env.DISABLE_AUTO_CAPTCHA !== 'true';
-        const canAutoSolve = autoSolveGloballyEnabled && parseBoolean(autoSolveEnabled, true);
+        const canAutoSolve = autoSolveGloballyEnabled
+            && parseBoolean(autoSolveEnabled, true)
+            && isUsernameAllowedForAutoSolveAndPush(effectiveUsername);
 
         if (canAutoSolve) {
             let allowSecondAttempt = false;
@@ -1269,6 +1294,12 @@ async function runBackgroundCheckForUser(userDoc) {
     if (!userDoc || !isValidIdentifier(userDoc._id)) return;
 
     const username = userDoc._id;
+    if (!isUsernameAllowedForAutoSolveAndPush(username)) {
+        Logger.info(`Skipping notifications for non-whitelisted user ${username}.`);
+        await removeAllSubscriptions(username);
+        return;
+    }
+
     const cols = getMongoCollections();
     if (!cols) return;
 
@@ -1501,11 +1532,18 @@ setInterval(() => {
 
 app.get('/api/features', (req, res) => {
     const mongoEnabled = isMongoEnabled();
+    const params = getParams(req);
+    const usernameAllowed = params.username
+        ? isUsernameAllowedForAutoSolveAndPush(params.username)
+        : !isAutoSolveWhitelistEnabled;
     res.json({
         mongoEnabled,
         pushEnabled: mongoEnabled && hasVapidConfig,
         vapidAvailable: hasVapidConfig,
-        autoSolveAvailable: hasGeminiConfig
+        autoSolveAvailable: hasGeminiConfig && usernameAllowed,
+        usernameAllowedForAutoSolveAndPush: usernameAllowed,
+        autoSolveWhitelistEnabled: isAutoSolveWhitelistEnabled,
+        autoSolveWhitelistActive: isAutoSolveWhitelistActive
     });
 });
 
@@ -1559,7 +1597,8 @@ app.post('/api/login', async (req, res) => {
 app.post('/api/refresh-grades', async (req, res) => {
     const params = getParams(req);
     const { username, deviceId, deviceModel, autoSolveEnabled, passwordBase64, cookies } = params;
-    const canAutoSolve = process.env.DISABLE_AUTO_CAPTCHA !== 'true' && autoSolveEnabled;
+    const usernameAllowed = isUsernameAllowedForAutoSolveAndPush(username);
+    const canAutoSolve = process.env.DISABLE_AUTO_CAPTCHA !== 'true' && autoSolveEnabled && usernameAllowed;
 
     try {
         if (isValidIdentifier(username)) {
@@ -1792,6 +1831,7 @@ app.get('/api/notifications/settings', async (req, res) => {
     if (!isValidIdentifier(username)) {
         return res.status(400).json({ error: 'Invalid username.' });
     }
+    const usernameAllowed = isUsernameAllowedForAutoSolveAndPush(username);
 
 
     const cols = getMongoCollections();
@@ -1826,6 +1866,7 @@ app.get('/api/notifications/settings', async (req, res) => {
     return res.json({
         success: true,
         mongoEnabled: true,
+        usernameAllowedForAutoSolveAndPush: usernameAllowed,
         hasSubscriptionDoc: !!subDoc,
         currentDeviceSubscribed: subscriptions.some(entry => entry && entry.deviceId === deviceId),
         checkIntervalMinutes: normalizeInterval(subDoc && subDoc.checkIntervalMinutes),
@@ -1863,6 +1904,13 @@ app.post('/api/notifications/subscribe', async (req, res) => {
 
     if (!isValidIdentifier(username) || !isValidIdentifier(deviceId)) {
         return res.status(400).json({ error: 'Invalid username or deviceId.' });
+    }
+
+    if (!isUsernameAllowedForAutoSolveAndPush(username)) {
+        return res.status(403).json({
+            error: 'This username is not allowed to use auto solve or push notifications.',
+            usernameNotAllowed: true
+        });
     }
 
     if (!isValidBase64(passwordBase64)) {
