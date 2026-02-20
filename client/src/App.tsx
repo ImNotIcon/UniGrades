@@ -806,7 +806,7 @@ const App: React.FC = () => {
             animate={{ opacity: 1, y: 0, x: '-50%' }}
             exit={{ opacity: 0, y: 24, x: '-50%' }}
             transition={{ duration: 0.2 }}
-            className={`fixed bottom-6 left-1/2 z-[70] w-[95%] px-6 py-3 rounded-full shadow-lg border ${darkMode ? 'bg-gray-800/95 text-gray-100 border-gray-700' : 'bg-gray-700/95 text-white border-gray-600'}`}
+            className={`fixed bottom-[calc(env(safe-area-inset-bottom)+5.75rem)] left-1/2 z-[70] w-[95%] px-6 py-3 rounded-full shadow-lg border ${darkMode ? 'bg-gray-800/95 text-gray-100 border-gray-700' : 'bg-gray-700/95 text-white border-gray-600'}`}
           >
             {gradesToast.message}
           </motion.div>

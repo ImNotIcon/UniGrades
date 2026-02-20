@@ -11,7 +11,7 @@ export default defineConfig({
       srcDir: 'src',
       filename: 'sw.ts',
       registerType: 'autoUpdate',
-      includeAssets: ['vite.svg', 'pwa-192x192.png', 'pwa-512x512.png'],
+      includeAssets: ['favicon.webp', 'pwa-192x192.png', 'pwa-512x512.png'],
       manifest: {
         name: 'University of Patras Grades',
         short_name: 'UniGrades',
@@ -40,7 +40,7 @@ export default defineConfig({
         ]
       },
       injectManifest: {
-        globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2}']
+        globPatterns: ['**/*.{js,css,html,ico,png,webp,svg,woff,woff2}']
       }
     })
   ],
