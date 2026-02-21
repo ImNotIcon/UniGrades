@@ -155,6 +155,28 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         }
     };
 
+    const persistSettingsSnapshot = (snapshot: Omit<SettingsCacheSnapshot, 'cachedAt'>) => {
+        localStorage.setItem('push_enabled', snapshot.currentDeviceSubscribed ? 'true' : 'false');
+        if (!settingsCacheKey) return;
+
+        try {
+            const payload: SettingsCacheSnapshot = {
+                ...snapshot,
+                cachedAt: Date.now()
+            };
+            localStorage.setItem(settingsCacheKey, JSON.stringify(payload));
+        } catch {
+            // no-op
+        }
+    };
+
+    const clearPersistedSettings = () => {
+        localStorage.setItem('push_enabled', 'false');
+        if (settingsCacheKey) {
+            localStorage.removeItem(settingsCacheKey);
+        }
+    };
+
     const resetSettingsState = ({ clearCache = false } = {}) => {
         setNotifEnabled(false);
         setHasSubscriptionDoc(false);
@@ -183,6 +205,55 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         }
     };
 
+    const refreshSettingsFromServer = async ({
+        applyToState = true,
+        showLoading = false
+    }: {
+        applyToState?: boolean;
+        showLoading?: boolean;
+    } = {}) => {
+        if (!pushSettingsAvailable || !username || !navigator.onLine) return;
+
+        if (showLoading) {
+            setLoading(true);
+        }
+
+        try {
+            const res = await fetch(
+                `${apiUrl}/notifications/settings?username=${encodeURIComponent(username)}&deviceId=${encodeURIComponent(deviceId)}`
+            );
+            const data = await res.json();
+
+            if (data.featureDisabled) {
+                if (applyToState) {
+                    resetSettingsState({ clearCache: true });
+                } else {
+                    clearPersistedSettings();
+                }
+                return;
+            }
+
+            const normalized = normalizeSettingsSnapshot({
+                currentDeviceSubscribed: data.currentDeviceSubscribed,
+                hasSubscriptionDoc: data.hasSubscriptionDoc,
+                checkIntervalMinutes: data.checkIntervalMinutes,
+                devices: data.devices
+            }, deviceId);
+
+            persistSettingsSnapshot(normalized);
+
+            if (applyToState) {
+                applySettingsSnapshot(normalized);
+            }
+        } catch {
+            // no-op
+        } finally {
+            if (showLoading) {
+                setLoading(false);
+            }
+        }
+    };
+
     const loadSettings = async () => {
         if (!isOpen) return;
 
@@ -197,36 +268,20 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             return;
         }
 
-        setLoading(true);
-        try {
-            const res = await fetch(
-                `${apiUrl}/notifications/settings?username=${encodeURIComponent(username)}&deviceId=${encodeURIComponent(deviceId)}`
-            );
-            const data = await res.json();
-
-            if (data.featureDisabled) {
-                resetSettingsState({ clearCache: true });
-                return;
-            }
-
-            const normalized = normalizeSettingsSnapshot({
-                currentDeviceSubscribed: data.currentDeviceSubscribed,
-                hasSubscriptionDoc: data.hasSubscriptionDoc,
-                checkIntervalMinutes: data.checkIntervalMinutes,
-                devices: data.devices
-            }, deviceId);
-            applySettingsSnapshot(normalized, { persist: true });
-        } catch {
-            // no-op
-        } finally {
-            setLoading(false);
-        }
+        await refreshSettingsFromServer({ applyToState: true, showLoading: true });
     };
 
     const ensureOnlineForRemoteChange = () => {
         if (navigator.onLine) return true;
         window.alert(OFFLINE_SETTINGS_MESSAGE);
         return false;
+    };
+
+    const handleModalClose = () => {
+        if (navigator.onLine) {
+            void refreshSettingsFromServer({ applyToState: false, showLoading: false });
+        }
+        onClose();
     };
 
     useEffect(() => {
@@ -471,14 +526,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         <div className="fixed inset-0 z-[80] flex items-center justify-center p-4">
             <div
                 className="absolute inset-0 bg-black/50 backdrop-blur-sm"
-                onClick={saving ? undefined : onClose}
+                onClick={saving ? undefined : handleModalClose}
             />
 
             <div className={`relative z-10 w-full max-w-2xl rounded-3xl border shadow-2xl ${darkMode ? 'bg-gray-900 border-gray-700 text-white' : 'bg-white border-gray-100 text-gray-900'}`}>
                 <div className={`flex items-center justify-between px-6 py-5 border-b ${darkMode ? 'border-gray-700' : 'border-gray-100'}`}>
                     <h3 className="text-xl font-black tracking-tight">Settings</h3>
                     <button
-                        onClick={onClose}
+                        onClick={handleModalClose}
                         disabled={saving}
                         className={`p-2 rounded-full ${darkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'} transition-colors`}
                     >
