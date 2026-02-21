@@ -69,10 +69,34 @@ const SESSION_POLL_TIMEOUT_MS = 5000;
 const PAUSED_SESSION_TTL_MS = 2 * 60 * 1000;
 const SESSION_WATCHDOG_TICK_MS = 1000;
 const COMPLETED_SESSION_TTL_MS = 2000;
+const MONGO_STATS_QUEUE_WINDOW_MS = (() => {
+    const value = Number.parseInt(process.env.MONGO_STATS_QUEUE_WINDOW_MS || '', 10);
+    return Number.isFinite(value) && value >= 0 ? value : 80;
+})();
+const MONGO_STATS_QUEUE_RETRY_MAX = (() => {
+    const value = Number.parseInt(process.env.MONGO_STATS_QUEUE_RETRY_MAX || '', 10);
+    return Number.isFinite(value) && value >= 0 ? value : 2;
+})();
+const MONGO_STATS_QUEUE_RETRY_BASE_MS = (() => {
+    const value = Number.parseInt(process.env.MONGO_STATS_QUEUE_RETRY_BASE_MS || '', 10);
+    return Number.isFinite(value) && value >= 0 ? value : 250;
+})();
+const MONGO_STATS_DRAIN_TIMEOUT_MS = 2000;
+const MONGO_STATS_QUEUE_DEPTH_WARN_THRESHOLD = 10;
 
 const SESSIONS = new Map();
 const USER_QUEUES = new Map();
 const USER_ACTIVE_SESSION = new Map();
+const STATS_PENDING_BY_USER = new Map();
+const STATS_TIMER_BY_USER = new Map();
+const MONGO_WRITE_CHAIN_BY_USER = new Map();
+const STATS_QUEUE_METRICS = {
+    enqueued: 0,
+    flushed: 0,
+    failed: 0,
+    dropped: 0,
+    retried: 0
+};
 let backgroundWorkerBusy = false;
 
 /**
@@ -378,7 +402,7 @@ async function apiErrorHandler(req, res, error, {
     }
 
     if (isValidIdentifier(username)) {
-        await incrementStatistics(username, statsIncrements, {
+        queueStatisticsUpdate(username, statsIncrements, {
             deviceId,
             deviceModel,
             touchLastSeen: true
@@ -457,90 +481,22 @@ function defaultStatsDocument(username) {
     };
 }
 
-async function ensureStatisticsDocument(username) {
-    if (!isMongoEnabled() || !isValidIdentifier(username)) return;
-    const cols = getMongoCollections();
-    if (!cols) return;
-
-    await cols.statistics.updateOne(
-        { _id: username },
-        {
-            $setOnInsert: defaultStatsDocument(username),
-            $set: { updatedAt: new Date() }
-        },
-        { upsert: true }
-    );
-}
-
-async function touchStatisticsDevice(username, deviceId, deviceModel, {
-    appOpenOnlineDelta = 0,
-    appOpenOfflineDelta = 0,
-    touchLastSeen = true
-} = {}) {
-    if (!isMongoEnabled()) return;
-    if (!isValidIdentifier(username) || !isValidIdentifier(deviceId)) return;
-
-    const cols = getMongoCollections();
-    if (!cols) return;
-
-    await ensureStatisticsDocument(username);
-
-    const doc = await cols.statistics.findOne(
-        { _id: username },
-        { projection: { devices: 1 } }
-    );
-
-    const now = new Date();
-    const devices = Array.isArray(doc && doc.devices) ? [...doc.devices] : [];
-    const index = devices.findIndex(d => d && d.deviceId === deviceId);
-
-    if (index === -1) {
-        devices.push({
-            deviceId,
-            model: normalizeDeviceModel(deviceModel),
-            lastSeen: now,
-            appOpenCountOnline: Math.max(0, appOpenOnlineDelta),
-            appOpenCountOffline: Math.max(0, appOpenOfflineDelta)
-        });
-    } else {
-        const existing = devices[index] || {};
-        devices[index] = {
-            ...existing,
-            deviceId,
-            model: normalizeDeviceModel(deviceModel) || normalizeDeviceModel(existing.model),
-            lastSeen: touchLastSeen ? now : (existing.lastSeen || now),
-            appOpenCountOnline: (Number(existing.appOpenCountOnline) || 0) + Math.max(0, appOpenOnlineDelta),
-            appOpenCountOffline: (Number(existing.appOpenCountOffline) || 0) + Math.max(0, appOpenOfflineDelta)
-        };
-    }
-
-    await cols.statistics.updateOne(
-        { _id: username },
-        {
-            $set: {
-                devices,
-                updatedAt: now
-            }
-        }
-    );
-}
+const STATS_INCREMENT_KEYS = [
+    'gradeRefreshCount',
+    'gradeRefreshCountCaptcha',
+    'failedRefreshCount',
+    'failedRefreshCountCaptcha',
+    'incorrectCaptchaCount',
+    'captchaRefreshCount',
+    'incorrectCaptchaCountAuto',
+    'failedLoginCount'
+];
 
 function sanitizeStatsIncrements(increments) {
-    const allowed = [
-        'gradeRefreshCount',
-        'gradeRefreshCountCaptcha',
-        'failedRefreshCount',
-        'failedRefreshCountCaptcha',
-        'incorrectCaptchaCount',
-        'captchaRefreshCount',
-        'incorrectCaptchaCountAuto',
-        'failedLoginCount'
-    ];
-
     const output = {};
     if (!isPlainObject(increments)) return output;
 
-    for (const key of allowed) {
+    for (const key of STATS_INCREMENT_KEYS) {
         const value = parseNonNegativeInt(increments[key], 0);
         if (value > 0) output[key] = value;
     }
@@ -548,37 +504,289 @@ function sanitizeStatsIncrements(increments) {
     return output;
 }
 
-async function incrementStatistics(username, increments = {}, {
+function createEmptyStatsAggregate() {
+    return {
+        increments: {},
+        devices: new Map(),
+        eventCount: 0,
+        firstEnqueuedAt: Date.now()
+    };
+}
+
+function mergeStatsAggregate(target, increments = {}, {
     deviceId = '',
     deviceModel = '',
     appOpenOnlineDelta = 0,
     appOpenOfflineDelta = 0,
     touchLastSeen = false
 } = {}) {
+    const cleanIncrements = sanitizeStatsIncrements(increments);
+    for (const [key, value] of Object.entries(cleanIncrements)) {
+        target.increments[key] = (target.increments[key] || 0) + value;
+    }
+
+    if (isValidIdentifier(deviceId)) {
+        const existing = target.devices.get(deviceId) || {
+            deviceId,
+            deviceModel: '',
+            appOpenOnlineDelta: 0,
+            appOpenOfflineDelta: 0,
+            touchLastSeen: false,
+            ensureDeviceRecord: false
+        };
+
+        existing.appOpenOnlineDelta += Math.max(0, parseNonNegativeInt(appOpenOnlineDelta, 0));
+        existing.appOpenOfflineDelta += Math.max(0, parseNonNegativeInt(appOpenOfflineDelta, 0));
+        existing.touchLastSeen = existing.touchLastSeen || parseBoolean(touchLastSeen, false);
+        existing.ensureDeviceRecord = true;
+
+        const normalizedModel = safeString(deviceModel, { maxLength: 160 });
+        if (normalizedModel) {
+            existing.deviceModel = normalizeDeviceModel(normalizedModel);
+        }
+
+        target.devices.set(deviceId, existing);
+    }
+
+    target.eventCount += 1;
+    return target;
+}
+
+function scheduleStatsFlush(username, delayMs = MONGO_STATS_QUEUE_WINDOW_MS) {
+    if (!isValidIdentifier(username)) return;
+    const existingTimer = STATS_TIMER_BY_USER.get(username);
+    if (existingTimer) {
+        if (delayMs > 0) return;
+        clearTimeout(existingTimer);
+        STATS_TIMER_BY_USER.delete(username);
+    }
+
+    const timeout = setTimeout(() => {
+        STATS_TIMER_BY_USER.delete(username);
+        flushStatsForUser(username).catch((error) => {
+            Logger.error(`Stats queue flush error: ${error.message}`, null, username);
+        });
+    }, Math.max(0, delayMs));
+
+    STATS_TIMER_BY_USER.set(username, timeout);
+}
+
+function queueStatisticsUpdate(username, increments = {}, options = {}) {
+    if (!isMongoEnabled() || !isValidIdentifier(username)) return;
+    try {
+        const aggregate = STATS_PENDING_BY_USER.get(username) || createEmptyStatsAggregate();
+        mergeStatsAggregate(aggregate, increments, options);
+        STATS_PENDING_BY_USER.set(username, aggregate);
+        STATS_QUEUE_METRICS.enqueued += 1;
+
+        if (aggregate.eventCount >= MONGO_STATS_QUEUE_DEPTH_WARN_THRESHOLD
+            && aggregate.eventCount % MONGO_STATS_QUEUE_DEPTH_WARN_THRESHOLD === 0) {
+            Logger.warn(
+                `Stats queue depth for user is ${aggregate.eventCount} event(s).`,
+                null,
+                username
+            );
+        }
+
+        scheduleStatsFlush(username, MONGO_STATS_QUEUE_WINDOW_MS);
+    } catch (error) {
+        Logger.error(`Failed to queue statistics update: ${error.message}`, null, username);
+    }
+}
+
+async function applyStatsAggregateToMongo(username, aggregate) {
     if (!isMongoEnabled() || !isValidIdentifier(username)) return;
     const cols = getMongoCollections();
     if (!cols) return;
 
-    await ensureStatisticsDocument(username);
+    const now = new Date();
+    const cleanIncrements = sanitizeStatsIncrements(aggregate && aggregate.increments);
+    const baseUpdate = {
+        $setOnInsert: defaultStatsDocument(username),
+        $set: { updatedAt: now }
+    };
 
-    const cleanIncrements = sanitizeStatsIncrements(increments);
     if (Object.keys(cleanIncrements).length > 0) {
-        await cols.statistics.updateOne(
-            { _id: username },
-            {
-                $inc: cleanIncrements,
-                $set: { updatedAt: new Date() }
-            }
-        );
+        baseUpdate.$inc = cleanIncrements;
     }
 
-    if (isValidIdentifier(deviceId)) {
-        await touchStatisticsDevice(username, deviceId, deviceModel, {
-            appOpenOnlineDelta,
-            appOpenOfflineDelta,
-            touchLastSeen
-        });
+    await cols.statistics.updateOne(
+        { _id: username },
+        baseUpdate,
+        { upsert: true }
+    );
+
+    const deviceEntries = aggregate && aggregate.devices instanceof Map
+        ? Array.from(aggregate.devices.values())
+        : [];
+
+    for (const entry of deviceEntries) {
+        if (!entry || !isValidIdentifier(entry.deviceId)) continue;
+
+        const incExisting = {};
+        if (entry.appOpenOnlineDelta > 0) {
+            incExisting['devices.$.appOpenCountOnline'] = entry.appOpenOnlineDelta;
+        }
+        if (entry.appOpenOfflineDelta > 0) {
+            incExisting['devices.$.appOpenCountOffline'] = entry.appOpenOfflineDelta;
+        }
+
+        const setExisting = {
+            updatedAt: now
+        };
+        if (entry.touchLastSeen) {
+            setExisting['devices.$.lastSeen'] = now;
+        }
+        if (entry.deviceModel) {
+            setExisting['devices.$.model'] = normalizeDeviceModel(entry.deviceModel);
+        }
+
+        const updateExisting = {
+            $set: setExisting
+        };
+        if (Object.keys(incExisting).length > 0) {
+            updateExisting.$inc = incExisting;
+        }
+
+        const existingResult = await cols.statistics.updateOne(
+            { _id: username, 'devices.deviceId': entry.deviceId },
+            updateExisting
+        );
+
+        if (!existingResult.matchedCount && entry.ensureDeviceRecord) {
+            await cols.statistics.updateOne(
+                { _id: username, 'devices.deviceId': { $ne: entry.deviceId } },
+                {
+                    $set: { updatedAt: now },
+                    $push: {
+                        devices: {
+                            deviceId: entry.deviceId,
+                            model: normalizeDeviceModel(entry.deviceModel || 'Unknown device'),
+                            lastSeen: now,
+                            appOpenCountOnline: Math.max(0, parseNonNegativeInt(entry.appOpenOnlineDelta, 0)),
+                            appOpenCountOffline: Math.max(0, parseNonNegativeInt(entry.appOpenOfflineDelta, 0))
+                        }
+                    }
+                }
+            );
+        }
     }
+}
+
+async function flushStatsAggregateWithRetry(username, aggregate) {
+    const retryCount = Math.max(0, MONGO_STATS_QUEUE_RETRY_MAX);
+    const deviceCount = aggregate && aggregate.devices instanceof Map ? aggregate.devices.size : 0;
+    const counterCount = aggregate ? Object.keys(aggregate.increments || {}).length : 0;
+    const eventCount = aggregate && Number.isFinite(aggregate.eventCount) ? aggregate.eventCount : 0;
+
+    for (let attempt = 0; attempt <= retryCount; attempt++) {
+        try {
+            await applyStatsAggregateToMongo(username, aggregate);
+            STATS_QUEUE_METRICS.flushed += 1;
+            Logger.info(
+                `Stats queue flushed (events=${eventCount}, counters=${counterCount}, devices=${deviceCount}).`,
+                null,
+                username
+            );
+            return;
+        } catch (error) {
+            STATS_QUEUE_METRICS.failed += 1;
+            if (attempt < retryCount) {
+                STATS_QUEUE_METRICS.retried += 1;
+                const retryDelay = MONGO_STATS_QUEUE_RETRY_BASE_MS * (2 ** attempt);
+                Logger.warn(
+                    `Stats queue flush attempt ${attempt + 1} failed, retrying in ${retryDelay}ms: ${error.message}`,
+                    null,
+                    username
+                );
+                await new Promise((resolve) => setTimeout(resolve, retryDelay));
+                continue;
+            }
+
+            STATS_QUEUE_METRICS.dropped += 1;
+            Logger.error(
+                `Dropping stats queue payload after ${attempt + 1} attempt(s). events=${eventCount}, counters=${counterCount}, devices=${deviceCount}. Error: ${error.message}`,
+                null,
+                username
+            );
+        }
+    }
+}
+
+async function flushStatsForUser(username) {
+    if (!isValidIdentifier(username)) return;
+
+    const aggregate = STATS_PENDING_BY_USER.get(username);
+    if (!aggregate) return;
+    STATS_PENDING_BY_USER.delete(username);
+
+    const previous = MONGO_WRITE_CHAIN_BY_USER.get(username) || Promise.resolve();
+    const current = previous.catch(() => { }).then(async () => {
+        await flushStatsAggregateWithRetry(username, aggregate);
+    }).finally(() => {
+        if (MONGO_WRITE_CHAIN_BY_USER.get(username) === current) {
+            if (STATS_PENDING_BY_USER.has(username)) {
+                scheduleStatsFlush(username, 0);
+            } else {
+                MONGO_WRITE_CHAIN_BY_USER.delete(username);
+            }
+        }
+    });
+
+    MONGO_WRITE_CHAIN_BY_USER.set(username, current);
+    return current;
+}
+
+async function drainStatsQueue(timeoutMs = MONGO_STATS_DRAIN_TIMEOUT_MS) {
+    const timeout = Math.max(0, parseNonNegativeInt(timeoutMs, MONGO_STATS_DRAIN_TIMEOUT_MS));
+    const deadline = Date.now() + timeout;
+
+    for (const [username, timer] of STATS_TIMER_BY_USER.entries()) {
+        clearTimeout(timer);
+        STATS_TIMER_BY_USER.delete(username);
+    }
+
+    for (const username of STATS_PENDING_BY_USER.keys()) {
+        scheduleStatsFlush(username, 0);
+    }
+
+    while ((STATS_PENDING_BY_USER.size > 0 || MONGO_WRITE_CHAIN_BY_USER.size > 0) && Date.now() < deadline) {
+        for (const username of STATS_PENDING_BY_USER.keys()) {
+            if (!MONGO_WRITE_CHAIN_BY_USER.has(username)) {
+                scheduleStatsFlush(username, 0);
+            }
+        }
+
+        const chains = Array.from(MONGO_WRITE_CHAIN_BY_USER.values());
+        if (chains.length === 0) {
+            await new Promise((resolve) => setTimeout(resolve, 20));
+            continue;
+        }
+
+        const remaining = Math.max(0, deadline - Date.now());
+        await Promise.race([
+            Promise.allSettled(chains),
+            new Promise((resolve) => setTimeout(resolve, Math.min(100, remaining)))
+        ]);
+    }
+
+    const pendingUsers = STATS_PENDING_BY_USER.size;
+    const activeChains = MONGO_WRITE_CHAIN_BY_USER.size;
+    if (pendingUsers > 0 || activeChains > 0) {
+        Logger.warn(
+            `Stats queue drain timed out with ${pendingUsers} pending user(s) and ${activeChains} active chain(s).`,
+            null,
+            'stats-q'
+        );
+        return false;
+    }
+
+    Logger.info(
+        `Stats queue drained. Metrics: enqueued=${STATS_QUEUE_METRICS.enqueued}, flushed=${STATS_QUEUE_METRICS.flushed}, failed=${STATS_QUEUE_METRICS.failed}, retried=${STATS_QUEUE_METRICS.retried}, dropped=${STATS_QUEUE_METRICS.dropped}.`,
+        null,
+        'stats-q'
+    );
+    return true;
 }
 
 async function syncStoredPasswordIfSubscriptionExists(username, passwordBase64) {
@@ -976,7 +1184,7 @@ async function submitCaptchaAndVerify(page, captchaFrame, answer, token = null) 
                 }
             }
             return null;
-        }, { timeout: 25000, polling: 500 }).then(h => h.jsonValue());
+        }, { timeout: 25000, polling: 50 }).then(h => h.jsonValue());
 
         if (result === 'SUCCESS') {
             Logger.info('Verification Success!', null, token);
@@ -1115,7 +1323,7 @@ async function executeAsyncScrape(token, browser, page) {
             latestSession.status = 'error';
             latestSession.error = error.message;
 
-            await incrementStatistics(latestSession.username, { failedRefreshCount: 1 }, latestSession);
+            queueStatisticsUpdate(latestSession.username, { failedRefreshCount: 1 }, latestSession);
         }
     }
 }
@@ -1205,7 +1413,7 @@ async function unifiedIviewFlow(token, browser, page, {
                 } catch (error) {
                     if (isIncorrectCaptchaError(error)) {
                         allowSecondAttempt = true;
-                        await incrementStatistics(effectiveUsername, { incorrectCaptchaCountAuto: 1 }, session || { deviceId: '', deviceModel: '' });
+                        queueStatisticsUpdate(effectiveUsername, { incorrectCaptchaCountAuto: 1 }, session || { deviceId: '', deviceModel: '' });
                     } else {
                         throw error;
                     }
@@ -1228,7 +1436,7 @@ async function unifiedIviewFlow(token, browser, page, {
                             return executeAsyncScrape(token, browser, page);
                         } catch (innerError) {
                             if (isIncorrectCaptchaError(innerError)) {
-                                await incrementStatistics(effectiveUsername, { incorrectCaptchaCountAuto: 1 }, session || { deviceId: '', deviceModel: '' });
+                                queueStatisticsUpdate(effectiveUsername, { incorrectCaptchaCountAuto: 1 }, session || { deviceId: '', deviceModel: '' });
                             }
                             throw innerError;
                         }
@@ -1245,7 +1453,7 @@ async function unifiedIviewFlow(token, browser, page, {
 
         if (!session.manualCaptchaCounted) {
             session.manualCaptchaCounted = true;
-            await incrementStatistics(effectiveUsername, { gradeRefreshCountCaptcha: 1 }, session);
+            queueStatisticsUpdate(effectiveUsername, { gradeRefreshCountCaptcha: 1 }, session);
         }
     } catch (error) {
         if (isBackground) throw error;
@@ -1254,7 +1462,7 @@ async function unifiedIviewFlow(token, browser, page, {
         if (session.browser) await session.browser.close().catch(() => { });
         session.status = 'error';
         session.error = error.message;
-        await incrementStatistics(effectiveUsername, { failedRefreshCount: 1 }, session);
+        queueStatisticsUpdate(effectiveUsername, { failedRefreshCount: 1 }, session);
     }
 }
 
@@ -1578,7 +1786,7 @@ app.post('/api/login', async (req, res) => {
         if (isMongoEnabled()) {
             const passwordBase64 = Buffer.from(password, 'utf8').toString('base64');
             await syncStoredPasswordIfSubscriptionExists(username, passwordBase64);
-            await incrementStatistics(username, {}, params);
+            queueStatisticsUpdate(username, {}, params);
         }
 
         Logger.info('Login successful. Returning cookies.', req);
@@ -1602,14 +1810,14 @@ app.post('/api/refresh-grades', async (req, res) => {
 
     try {
         if (isValidIdentifier(username)) {
-            await incrementStatistics(username, { gradeRefreshCount: 1 }, params);
+            queueStatisticsUpdate(username, { gradeRefreshCount: 1 }, params);
         }
 
         Logger.info('Grade refresh request received', req, username);
 
         if (!Array.isArray(cookies) || cookies.length === 0) {
             if (isValidIdentifier(username)) {
-                await incrementStatistics(username, { failedRefreshCount: 1 }, params);
+                queueStatisticsUpdate(username, { failedRefreshCount: 1 }, params);
             }
             return res.status(400).json({ error: 'No session cookies provided. Please login first.' });
         }
@@ -1664,7 +1872,7 @@ app.post('/api/refresh-grades', async (req, res) => {
                 session.status = 'error';
                 session.error = error.message;
 
-                await incrementStatistics(username, { failedRefreshCount: 1 }, params);
+                queueStatisticsUpdate(username, { failedRefreshCount: 1 }, params);
             }
         }, { token: sessionToken });
     } catch (error) {
@@ -1711,7 +1919,7 @@ app.post('/api/solve-captcha', async (req, res) => {
 
         const isWrong = isIncorrectCaptchaError(error);
         if (isWrong) {
-            await incrementStatistics(session.username, { incorrectCaptchaCount: 1 }, session);
+            queueStatisticsUpdate(session.username, { incorrectCaptchaCount: 1 }, session);
 
             const refreshedBuffer = await refreshCaptcha(session.page, session.captchaFrame, token);
             if (refreshedBuffer) {
@@ -1782,7 +1990,7 @@ app.post('/api/refresh-captcha', async (req, res) => {
         return res.status(404).json({ error: 'Session expired' });
     }
 
-    await incrementStatistics(session.username, { captchaRefreshCount: 1 }, session);
+    queueStatisticsUpdate(session.username, { captchaRefreshCount: 1 }, session);
 
     const buffer = await refreshCaptcha(session.page, session.captchaFrame, token);
     if (!buffer) {
@@ -1989,7 +2197,7 @@ app.post('/api/notifications/subscribe', async (req, res) => {
         { upsert: true }
     );
 
-    await incrementStatistics(username, {}, params);
+    queueStatisticsUpdate(username, {}, params);
 
 
     return res.json({
@@ -2085,7 +2293,7 @@ app.post('/api/statistics/app-open', async (req, res) => {
         return res.status(400).json({ error: 'Invalid username or deviceId.' });
     }
 
-    await incrementStatistics(username, {}, {
+    queueStatisticsUpdate(username, {}, {
         ...params,
         appOpenOnlineDelta: countOnlineOpen ? 1 : 0,
         appOpenOfflineDelta: offlineOpenDelta
@@ -2100,16 +2308,34 @@ app.listen(PORT, '0.0.0.0', async () => {
     Logger.info(`Server running on 0.0.0.0:${PORT}`);
 });
 
-process.on('SIGINT', async () => {
+let shuttingDown = false;
+
+async function shutdownGracefully(signal) {
+    if (shuttingDown) return;
+    shuttingDown = true;
+
+    Logger.info(`Received ${signal}. Draining Mongo stats queue...`);
+    await drainStatsQueue(MONGO_STATS_DRAIN_TIMEOUT_MS).catch((error) => {
+        Logger.error(`Stats queue drain failed during ${signal}: ${error.message}`);
+    });
+
     if (mongoState.client) {
         await mongoState.client.close().catch(() => { });
     }
+
     process.exit(0);
+}
+
+process.on('SIGINT', () => {
+    shutdownGracefully('SIGINT').catch((error) => {
+        Logger.error(`Shutdown error on SIGINT: ${error.message}`);
+        process.exit(1);
+    });
 });
 
-process.on('SIGTERM', async () => {
-    if (mongoState.client) {
-        await mongoState.client.close().catch(() => { });
-    }
-    process.exit(0);
+process.on('SIGTERM', () => {
+    shutdownGracefully('SIGTERM').catch((error) => {
+        Logger.error(`Shutdown error on SIGTERM: ${error.message}`);
+        process.exit(1);
+    });
 });

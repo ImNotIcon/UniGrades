@@ -33,6 +33,17 @@ const INTERVAL_OPTIONS = [
     { label: '12 hours', value: 720 },
     { label: '1 day', value: 1440 },
 ];
+const SETTINGS_CACHE_PREFIX = 'up_settings_cache:';
+const DEFAULT_INTERVAL_MINUTES = 30;
+const OFFLINE_SETTINGS_MESSAGE = 'You are offline. This change requires an internet connection and cannot be applied.';
+
+interface SettingsCacheSnapshot {
+    currentDeviceSubscribed: boolean;
+    hasSubscriptionDoc: boolean;
+    checkIntervalMinutes: number;
+    devices: DeviceEntry[];
+    cachedAt: number;
+}
 
 const supportsPush = () => (
     typeof window !== 'undefined' &&
@@ -52,6 +63,40 @@ const urlBase64ToUint8Array = (base64String: string): ArrayBuffer => {
     }
 
     return outputArray.buffer;
+};
+
+const normalizeSettingsSnapshot = (
+    value: unknown,
+    currentDeviceId: string
+): Omit<SettingsCacheSnapshot, 'cachedAt'> => {
+    const raw = (value && typeof value === 'object') ? (value as Record<string, unknown>) : {};
+    const rawDevices = Array.isArray(raw.devices) ? raw.devices : [];
+    const devices: DeviceEntry[] = rawDevices
+        .filter(item => item && typeof item === 'object')
+        .map((item) => {
+            const entry = item as Record<string, unknown>;
+            const entryId = typeof entry.deviceId === 'string' ? entry.deviceId : '';
+            const model = typeof entry.model === 'string' ? entry.model : 'Unknown device';
+            const lastSeen = typeof entry.lastSeen === 'string' ? entry.lastSeen : null;
+            const isCurrent = entryId === currentDeviceId;
+            return {
+                deviceId: entryId,
+                model,
+                lastSeen,
+                isCurrent
+            };
+        })
+        .filter(entry => !!entry.deviceId);
+
+    const interval = Number(raw.checkIntervalMinutes);
+    const isAllowedInterval = INTERVAL_OPTIONS.some(option => option.value === interval);
+
+    return {
+        currentDeviceSubscribed: !!raw.currentDeviceSubscribed,
+        hasSubscriptionDoc: !!raw.hasSubscriptionDoc,
+        checkIntervalMinutes: isAllowedInterval ? interval : DEFAULT_INTERVAL_MINUTES,
+        devices
+    };
 };
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -81,15 +126,74 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
     const canUsePush = useMemo(() => supportsPush(), []);
     const pushSettingsAvailable = mongoEnabled && pushEnabled;
+    const settingsCacheKey = useMemo(
+        () => (username ? `${SETTINGS_CACHE_PREFIX}${username}` : ''),
+        [username]
+    );
+
+    const applySettingsSnapshot = (
+        snapshot: Omit<SettingsCacheSnapshot, 'cachedAt'>,
+        { persist = false } = {}
+    ) => {
+        setNotifEnabled(snapshot.currentDeviceSubscribed);
+        setHasSubscriptionDoc(snapshot.hasSubscriptionDoc);
+        setDevices(snapshot.devices);
+        setIntervalMinutes(snapshot.checkIntervalMinutes);
+
+        localStorage.setItem('push_enabled', snapshot.currentDeviceSubscribed ? 'true' : 'false');
+
+        if (persist && settingsCacheKey) {
+            try {
+                const payload: SettingsCacheSnapshot = {
+                    ...snapshot,
+                    cachedAt: Date.now()
+                };
+                localStorage.setItem(settingsCacheKey, JSON.stringify(payload));
+            } catch {
+                // no-op
+            }
+        }
+    };
+
+    const resetSettingsState = ({ clearCache = false } = {}) => {
+        setNotifEnabled(false);
+        setHasSubscriptionDoc(false);
+        setDevices([]);
+        setIntervalMinutes(DEFAULT_INTERVAL_MINUTES);
+        localStorage.setItem('push_enabled', 'false');
+
+        if (clearCache && settingsCacheKey) {
+            localStorage.removeItem(settingsCacheKey);
+        }
+    };
+
+    const loadCachedSettings = () => {
+        if (!settingsCacheKey) return false;
+
+        try {
+            const cachedRaw = localStorage.getItem(settingsCacheKey);
+            if (!cachedRaw) return false;
+
+            const parsed = JSON.parse(cachedRaw);
+            const normalized = normalizeSettingsSnapshot(parsed, deviceId);
+            applySettingsSnapshot(normalized);
+            return true;
+        } catch {
+            return false;
+        }
+    };
 
     const loadSettings = async () => {
         if (!isOpen) return;
 
         if (!pushSettingsAvailable || !username) {
-            setNotifEnabled(false);
-            setHasSubscriptionDoc(false);
-            setDevices([]);
-            setIntervalMinutes(30);
+            resetSettingsState();
+            return;
+        }
+
+        loadCachedSettings();
+
+        if (!navigator.onLine) {
             return;
         }
 
@@ -101,24 +205,28 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             const data = await res.json();
 
             if (data.featureDisabled) {
-                setNotifEnabled(false);
-                setHasSubscriptionDoc(false);
-                setDevices([]);
-                setIntervalMinutes(30);
+                resetSettingsState({ clearCache: true });
                 return;
             }
 
-            setNotifEnabled(!!data.currentDeviceSubscribed);
-            setHasSubscriptionDoc(!!data.hasSubscriptionDoc);
-            setDevices(Array.isArray(data.devices) ? data.devices : []);
-            setIntervalMinutes(Number(data.checkIntervalMinutes) || 30);
-
-            localStorage.setItem('push_enabled', data.currentDeviceSubscribed ? 'true' : 'false');
+            const normalized = normalizeSettingsSnapshot({
+                currentDeviceSubscribed: data.currentDeviceSubscribed,
+                hasSubscriptionDoc: data.hasSubscriptionDoc,
+                checkIntervalMinutes: data.checkIntervalMinutes,
+                devices: data.devices
+            }, deviceId);
+            applySettingsSnapshot(normalized, { persist: true });
         } catch {
             // no-op
         } finally {
             setLoading(false);
         }
+    };
+
+    const ensureOnlineForRemoteChange = () => {
+        if (navigator.onLine) return true;
+        window.alert(OFFLINE_SETTINGS_MESSAGE);
+        return false;
     };
 
     useEffect(() => {
@@ -145,6 +253,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
     const submitSubscription = async (consent: boolean) => {
         if (!username || !deviceId) return;
+        if (!ensureOnlineForRemoteChange()) return;
 
         if (!passwordBase64) {
             window.alert('Password is required to enable notifications. Please login again and try once more.');
@@ -190,6 +299,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             window.alert('Push notifications are not configured on this server.');
             return;
         }
+        if (!ensureOnlineForRemoteChange()) {
+            return;
+        }
         if (!canUsePush) {
             window.alert('Push notifications are not supported in this browser.');
             return;
@@ -216,7 +328,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     };
 
     const handleDisableNotifications = async () => {
-        if (!username || !deviceId) return;
+        if (!username || !deviceId) return false;
+        if (!ensureOnlineForRemoteChange()) return false;
 
         setSaving(true);
         try {
@@ -235,14 +348,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             setNotifEnabled(false);
             localStorage.setItem('push_enabled', 'false');
             await loadSettings();
+            return true;
         } catch {
             window.alert('Failed to disable notifications.');
+            return false;
         } finally {
             setSaving(false);
         }
     };
 
     const handleDeleteDevice = async (targetDeviceId: string) => {
+        if (!ensureOnlineForRemoteChange()) return;
         const confirmed = window.confirm('Delete notifications for this device?');
         if (!confirmed) return;
 
@@ -271,6 +387,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     };
 
     const handleDeleteAll = async () => {
+        if (!ensureOnlineForRemoteChange()) return;
         const confirmed = window.confirm('Delete all notification subscriptions for this account?');
         if (!confirmed) return;
 
@@ -297,11 +414,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     };
 
     const handleIntervalChange = async (next: number) => {
-        setIntervalMinutes(next);
-
         if (!hasSubscriptionDoc || !pushSettingsAvailable || !username) {
+            setIntervalMinutes(next);
             return;
         }
+
+        if (!ensureOnlineForRemoteChange()) {
+            return;
+        }
+
+        const previousInterval = intervalMinutes;
+        setIntervalMinutes(next);
 
         try {
             const res = await fetch(`${apiUrl}/notifications/interval`, {
@@ -312,9 +435,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             const data = await res.json();
             if (res.ok && data.checkIntervalMinutes) {
                 setIntervalMinutes(data.checkIntervalMinutes);
+            } else if (!res.ok) {
+                setIntervalMinutes(previousInterval);
             }
         } catch {
-            // no-op
+            setIntervalMinutes(previousInterval);
         }
     };
 
@@ -333,7 +458,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 return;
             }
 
-            await handleDisableNotifications();
+            const disabled = await handleDisableNotifications();
+            if (!disabled) return;
         }
 
         onAutoSolveChange(false);
