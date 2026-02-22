@@ -65,10 +65,11 @@ const ALLOWED_INTERVALS = new Set([10, 30, 60, 360, 720, 1440]);
 const MAX_SUBSCRIPTIONS_PER_USER = 2;
 const INACTIVE_DEVICE_MS = 14 * 24 * 60 * 60 * 1000;
 const BACKGROUND_CHECK_TICK_MS = 60 * 1000;
-const SESSION_POLL_TIMEOUT_MS = 5000;
+const SESSION_POLL_TIMEOUT_MS = 10000;
 const PAUSED_SESSION_TTL_MS = 2 * 60 * 1000;
 const SESSION_WATCHDOG_TICK_MS = 1000;
 const COMPLETED_SESSION_TTL_MS = 2000;
+const STATUS_LONG_POLL_TIMEOUT_MS = 8000;
 const MONGO_STATS_QUEUE_WINDOW_MS = (() => {
     const value = Number.parseInt(process.env.MONGO_STATS_QUEUE_WINDOW_MS || '', 10);
     return Number.isFinite(value) && value >= 0 ? value : 80;
@@ -98,6 +99,95 @@ const STATS_QUEUE_METRICS = {
     retried: 0
 };
 let backgroundWorkerBusy = false;
+let sharedBrowser = null;
+let sharedBrowserPromise = null;
+
+function nowMs() {
+    return Date.now();
+}
+
+function initTiming(session) {
+    session.timings = {
+        startedAt: nowMs(),
+        marks: {}
+    };
+}
+
+function markTiming(session, label) {
+    if (!session || !session.timings || !session.timings.marks) return;
+    session.timings.marks[label] = nowMs() - session.timings.startedAt;
+}
+
+function flushTimingLog(session, token, extra = {}) {
+    if (!session || !session.timings) return;
+    const marks = session.timings.marks || {};
+    const payload = {
+        totalMs: nowMs() - session.timings.startedAt,
+        ...marks,
+        ...extra
+    };
+    Logger.info(`Flow timings ${JSON.stringify(payload)}`, null, token || session.username);
+}
+
+function notifySessionUpdated(token) {
+    const session = SESSIONS.get(token);
+    if (!session) return;
+    session.lastActive = nowMs();
+    const waiters = Array.isArray(session.statusWaiters) ? session.statusWaiters : [];
+    session.statusWaiters = [];
+    for (const resolve of waiters) {
+        try {
+            resolve();
+        } catch {
+            // Ignore waiter failures
+        }
+    }
+}
+
+async function waitForSessionUpdate(token, timeoutMs) {
+    const session = SESSIONS.get(token);
+    if (!session) return false;
+    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return true;
+
+    await new Promise((resolve) => {
+        const latest = SESSIONS.get(token);
+        if (!latest) return resolve();
+        if (!Array.isArray(latest.statusWaiters)) latest.statusWaiters = [];
+        const wrappedResolve = () => {
+            if (!Array.isArray(latest.statusWaiters)) return resolve();
+            latest.statusWaiters = latest.statusWaiters.filter(fn => fn !== wrappedResolve);
+            resolve();
+        };
+        latest.statusWaiters.push(wrappedResolve);
+        setTimeout(wrappedResolve, timeoutMs);
+    });
+    return true;
+}
+
+async function getSharedBrowser() {
+    if (sharedBrowser && sharedBrowser.isConnected && sharedBrowser.isConnected()) {
+        return sharedBrowser;
+    }
+    if (sharedBrowserPromise) return sharedBrowserPromise;
+
+    sharedBrowserPromise = (async () => {
+        const browser = await puppeteer.launch({
+            headless: process.env.HEADLESS !== 'false',
+            ...BROWSER_LAUNCH_OPTIONS
+        });
+        browser.on('disconnected', () => {
+            sharedBrowser = null;
+        });
+        sharedBrowser = browser;
+        return browser;
+    })();
+
+    try {
+        return await sharedBrowserPromise;
+    } finally {
+        sharedBrowserPromise = null;
+    }
+}
 
 /**
  * Ensures only one active grade refresh per user is running.
@@ -391,9 +481,12 @@ async function apiErrorHandler(req, res, error, {
     token = '',
     context = 'API Error',
     statsIncrements = {},
-    browser = null
+    browser = null,
+    cleanup = null
 } = {}) {
-    if (browser) {
+    if (typeof cleanup === 'function') {
+        await cleanup().catch(() => { });
+    } else if (browser) {
         await browser.close().catch(() => { });
     }
 
@@ -976,6 +1069,8 @@ function createSession(browser, page, {
     SESSIONS.set(token, {
         browser,
         page,
+        context: null,
+        cleanup: null,
         status,
         username,
         deviceId,
@@ -987,8 +1082,11 @@ function createSession(browser, page, {
         lastStatusPollAt: Date.now(),
         paused: false,
         pausedAt: null,
-        completedAt: null
+        completedAt: null,
+        statusWaiters: []
     });
+    const session = SESSIONS.get(token);
+    initTiming(session);
     return token;
 }
 
@@ -1055,10 +1153,15 @@ async function closeSession(token) {
     if (!session) return;
 
     try {
-        if (session.browser) {
-            await session.browser.close().catch(() => { });
+        if (typeof session.cleanup === 'function') {
+            await session.cleanup().catch(() => { });
+        } else if (session.context) {
+            await session.context.close().catch(() => { });
+        } else if (session.page) {
+            await session.page.close().catch(() => { });
         }
     } finally {
+        notifySessionUpdated(token);
         SESSIONS.delete(token);
     }
 }
@@ -1106,18 +1209,29 @@ async function isBodyEmpty(page) {
 }
 
 async function launchBrowser() {
-    const browser = await puppeteer.launch({
-        headless: process.env.HEADLESS !== 'false',
-        ...BROWSER_LAUNCH_OPTIONS
-    });
+    const browser = await getSharedBrowser();
+    let context = null;
+    if (typeof browser.createIncognitoBrowserContext === 'function') {
+        context = await browser.createIncognitoBrowserContext();
+    } else if (typeof browser.createBrowserContext === 'function') {
+        context = await browser.createBrowserContext();
+    }
 
-    const page = await browser.newPage();
+    const page = context ? await context.newPage() : await browser.newPage();
     await page.setViewport({ width: 1920, height: 1080 });
     await page.setUserAgent(
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     );
 
-    return { browser, page };
+    const close = async () => {
+        if (context) {
+            await context.close().catch(() => { });
+            return;
+        }
+        await page.close().catch(() => { });
+    };
+
+    return { browser, context, page, close };
 }
 
 async function navigateToIview(page, token) {
@@ -1268,7 +1382,7 @@ async function submitCaptchaAndVerify(page, captchaFrame, answer, token = null) 
                 }
             }
             return null;
-        }, { timeout: 25000, polling: 50 }).then(h => h.jsonValue());
+        }, { timeout: 25000, polling: 175 }).then(h => h.jsonValue());
 
         if (result === 'SUCCESS') {
             Logger.info('Verification Success!', null, token);
@@ -1289,7 +1403,7 @@ async function submitCaptchaAndVerify(page, captchaFrame, answer, token = null) 
 
 async function authenticatePortalLogin(page, username, password, token) {
     Logger.info('Navigating to login page...', null, token);
-    await page.goto('https://progress.upatras.gr', { waitUntil: 'networkidle2', timeout: 5000 });
+    await page.goto('https://progress.upatras.gr', { waitUntil: 'domcontentloaded', timeout: 5000 });
 
     let usernameSelector = '#inputEmail';
     const passwordSelector = '#inputPassword';
@@ -1305,7 +1419,7 @@ async function authenticatePortalLogin(page, username, password, token) {
     Logger.info('Submitting login form...', null, token);
     try {
         await Promise.all([
-            page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 }).catch(() => {
+            page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 12000 }).catch(() => {
                 Logger.warn('Login navigation timed out, checking state...', null, token);
             }),
             page.click('#loginButton')
@@ -1358,11 +1472,13 @@ async function authenticatePortalLogin(page, username, password, token) {
  */
 async function performPortalScrape(page, token) {
     let result;
+    const retryDelays = [900, 1800];
     for (let attempt = 0; attempt < 3; attempt++) {
         if (token && !(await waitIfSessionPaused(token))) return null;
         result = await scrapeGrades(page, token);
         if (result && Array.isArray(result.grades) && result.grades.length > 0) break;
-        await page.waitForFunction(() => document.querySelector('table, .urST, iframe'), { timeout: 8000 }).catch(() => { });
+        const waitMs = retryDelays[Math.min(attempt, retryDelays.length - 1)];
+        await page.waitForFunction(() => document.querySelector('table, .urST, iframe'), { timeout: waitMs }).catch(() => { });
     }
 
     if (token && !(await waitIfSessionPaused(token))) return null;
@@ -1372,11 +1488,12 @@ async function performPortalScrape(page, token) {
     return result;
 }
 
-async function executeAsyncScrape(token, browser, page) {
+async function executeAsyncScrape(token, page) {
     const session = SESSIONS.get(token);
     if (!session) return;
 
     session.status = 'loading';
+    notifySessionUpdated(token);
     try {
         const result = await performPortalScrape(page, token);
         if (!result) return; // Session closed/paused during scrape
@@ -1385,7 +1502,11 @@ async function executeAsyncScrape(token, browser, page) {
         if (!latestSession) return;
 
         const newCookies = await page.cookies();
-        await browser.close();
+        markTiming(latestSession, 'scrapeDoneMs');
+        if (typeof latestSession.cleanup === 'function') {
+            await latestSession.cleanup().catch(() => { });
+            latestSession.cleanup = null;
+        }
 
         latestSession.status = 'completed';
         latestSession.completedAt = Date.now();
@@ -1396,16 +1517,21 @@ async function executeAsyncScrape(token, browser, page) {
             headers: result.headers || [],
             cookies: newCookies
         };
+        flushTimingLog(latestSession, token, { status: 'completed' });
+        notifySessionUpdated(token);
     } catch (error) {
         Logger.error(`Background scrape for session failed: ${error.message}`, null, token);
 
         const latestSession = SESSIONS.get(token);
         if (latestSession) {
-            if (latestSession.browser) {
-                await latestSession.browser.close().catch(() => { });
+            if (typeof latestSession.cleanup === 'function') {
+                await latestSession.cleanup().catch(() => { });
+                latestSession.cleanup = null;
             }
             latestSession.status = 'error';
             latestSession.error = error.message;
+            flushTimingLog(latestSession, token, { status: 'error' });
+            notifySessionUpdated(token);
 
             queueStatisticsUpdate(latestSession.username, { failedRefreshCount: 1 }, latestSession);
         }
@@ -1417,6 +1543,7 @@ async function executeAsyncScrape(token, browser, page) {
  */
 async function unifiedIviewFlow(token, browser, page, {
     skipNavigation = false,
+    forceLogin = false,
     autoSolveEnabled = true,
     isBackground = false,
     username = '',
@@ -1431,14 +1558,24 @@ async function unifiedIviewFlow(token, browser, page, {
     const contextToken = isBackground ? 'notifier' : token;
 
     try {
+        if (session) markTiming(session, 'flowStartMs');
         if (!isBackground && !(await waitIfSessionPaused(token))) return;
 
-        if (Array.isArray(cookies) && cookies.length > 0) {
+        let plain = passwordPlain;
+        if (!plain && isValidBase64(passwordBase64)) {
+            plain = Buffer.from(passwordBase64, 'base64').toString('utf8');
+        }
+
+        if (forceLogin && plain && isValidIdentifier(effectiveUsername)) {
+            await authenticatePortalLogin(page, effectiveUsername, plain, contextToken);
+            if (session) markTiming(session, 'authMs');
+        } else if (Array.isArray(cookies) && cookies.length > 0) {
             await page.setCookie(...cookies);
         }
 
         if (!skipNavigation) {
             await navigateToIview(page, contextToken);
+            if (session) markTiming(session, 'navigateMs');
         }
 
 
@@ -1446,10 +1583,7 @@ async function unifiedIviewFlow(token, browser, page, {
 
         // Auto Re-login logic if body is empty
         if (await isBodyEmpty(page)) {
-            let plain = passwordPlain;
-            if (!plain && isValidBase64(passwordBase64)) {
-                plain = Buffer.from(passwordBase64, 'base64').toString('utf8');
-            } else if (!plain && isMongoEnabled() && isValidIdentifier(effectiveUsername)) {
+            if (!plain && isMongoEnabled() && isValidIdentifier(effectiveUsername)) {
                 const cols = getMongoCollections();
                 const userDoc = await cols.subscriptions.findOne({ _id: effectiveUsername });
                 if (userDoc && userDoc.passwordBase64) {
@@ -1462,6 +1596,7 @@ async function unifiedIviewFlow(token, browser, page, {
                 if (session) session.message = 'Session expired. Re-authenticating...';
                 await authenticatePortalLogin(page, effectiveUsername, plain, contextToken);
                 await navigateToIview(page, contextToken);
+                if (session) markTiming(session, 'reauthMs');
                 if (await isBodyEmpty(page)) throw new Error('Session still empty after re-authentication.');
             } else {
                 throw new Error('Session expired or empty.');
@@ -1470,6 +1605,7 @@ async function unifiedIviewFlow(token, browser, page, {
 
         const captchaFrame = await findGradesFrame(page, false, 12000, contextToken);
         if (!captchaFrame) throw new Error('Captcha/Grades frame not found.');
+        if (session) markTiming(session, 'frameFoundMs');
 
         if (session) session.captchaFrame = captchaFrame;
 
@@ -1493,7 +1629,8 @@ async function unifiedIviewFlow(token, browser, page, {
                     if (!isBackground && !(await waitIfSessionPaused(token))) return;
                     await submitCaptchaAndVerify(page, currentFrame, firstAutoText, contextToken);
                     if (isBackground) return await performPortalScrape(page, contextToken);
-                    return executeAsyncScrape(token, browser, page);
+                    if (session) markTiming(session, 'captchaSolvedMs');
+                    return executeAsyncScrape(token, page);
                 } catch (error) {
                     if (isIncorrectCaptchaError(error)) {
                         allowSecondAttempt = true;
@@ -1517,7 +1654,8 @@ async function unifiedIviewFlow(token, browser, page, {
                             if (!isBackground && !(await waitIfSessionPaused(token))) return;
                             await submitCaptchaAndVerify(page, currentFrame, secondAutoText, contextToken);
                             if (isBackground) return await performPortalScrape(page, contextToken);
-                            return executeAsyncScrape(token, browser, page);
+                            if (session) markTiming(session, 'captchaSolvedMs');
+                            return executeAsyncScrape(token, page);
                         } catch (innerError) {
                             if (isIncorrectCaptchaError(innerError)) {
                                 queueStatisticsUpdate(effectiveUsername, { incorrectCaptchaCountAuto: 1 }, session || { deviceId: '', deviceModel: '' });
@@ -1534,6 +1672,7 @@ async function unifiedIviewFlow(token, browser, page, {
         session.status = 'manual_captcha';
         session.captchaImage = `data:image/png;base64,${currentCaptchaBuffer.toString('base64')}`;
         session.message = canAutoSolve ? 'Auto-solve failed. Please solve the captcha manually.' : 'Please solve the captcha manually.';
+        notifySessionUpdated(token);
 
         if (!session.manualCaptchaCounted) {
             session.manualCaptchaCounted = true;
@@ -1543,9 +1682,14 @@ async function unifiedIviewFlow(token, browser, page, {
         if (isBackground) throw error;
 
         Logger.error(`Portal flow error: ${error.message}`, null, token);
-        if (session.browser) await session.browser.close().catch(() => { });
+        if (session && typeof session.cleanup === 'function') {
+            await session.cleanup().catch(() => { });
+            session.cleanup = null;
+        }
         session.status = 'error';
         session.error = error.message;
+        flushTimingLog(session, token, { status: 'error' });
+        notifySessionUpdated(token);
         queueStatisticsUpdate(effectiveUsername, { failedRefreshCount: 1 }, session);
     }
 }
@@ -1556,10 +1700,10 @@ async function startGradePortalFlow(token, browser, page, options = {}) {
 
 async function fetchGradesForNotifications(username, passwordPlain) {
     return enqueueUserTask(username, async () => {
-        let browser;
+        let cleanup = null;
         try {
             const launched = await launchBrowser();
-            browser = launched.browser;
+            cleanup = launched.close;
             const page = launched.page;
 
             await authenticatePortalLogin(page, username, passwordPlain, 'notifier');
@@ -1575,7 +1719,7 @@ async function fetchGradesForNotifications(username, passwordPlain) {
                 studentInfo: (result && result.studentInfo) ? result.studentInfo : {}
             };
         } finally {
-            if (browser) await browser.close().catch(() => { });
+            if (cleanup) await cleanup().catch(() => { });
         }
     });
 }
@@ -1856,16 +2000,16 @@ app.post('/api/login', async (req, res) => {
 
     Logger.info('Login request received', req);
 
-    let browser;
+    let cleanup = null;
     try {
         const launched = await launchBrowser();
-        browser = launched.browser;
+        cleanup = launched.close;
         const page = launched.page;
 
         await authenticatePortalLogin(page, username, password);
 
         const currentCookies = await page.cookies();
-        await browser.close();
+        await launched.close();
 
         if (isMongoEnabled()) {
             const passwordBase64 = Buffer.from(password, 'utf8').toString('base64');
@@ -1880,7 +2024,7 @@ app.post('/api/login', async (req, res) => {
             ...params,
             context: 'Login error',
             statsIncrements: { failedLoginCount: 1 },
-            browser
+            cleanup
         });
     }
 });
@@ -1891,6 +2035,9 @@ app.post('/api/refresh-grades', async (req, res) => {
     const { username, deviceId, deviceModel, autoSolveEnabled, passwordBase64, cookies } = params;
     const usernameAllowed = isUsernameAllowedForAutoSolveAndPush(username);
     const canAutoSolve = process.env.DISABLE_AUTO_CAPTCHA !== 'true' && autoSolveEnabled && usernameAllowed;
+    const hasCookies = Array.isArray(cookies) && cookies.length > 0;
+    const canForceLogin = isValidIdentifier(username) && isValidBase64(passwordBase64);
+    const forceLogin = !hasCookies && canForceLogin;
 
     try {
         if (isValidIdentifier(username)) {
@@ -1899,14 +2046,14 @@ app.post('/api/refresh-grades', async (req, res) => {
 
         Logger.info('Grade refresh request received', req, username);
 
-        if (!Array.isArray(cookies) || cookies.length === 0) {
+        if (!hasCookies && !forceLogin) {
             if (isValidIdentifier(username)) {
                 queueStatisticsUpdate(username, { failedRefreshCount: 1 }, params);
             }
-            return res.status(400).json({ error: 'No session cookies provided. Please login first.' });
+            return res.status(400).json({ error: 'No session cookies and no valid password available. Please login first.' });
         }
 
-        Logger.info('Session valid! Returning placeholder session...', req, username);
+        Logger.info('Starting refresh session...', req, username);
 
         const existingToken = canAutoSolve ? getInFlightSessionTokenForUser(username) : null;
         if (existingToken) {
@@ -1935,26 +2082,35 @@ app.post('/api/refresh-grades', async (req, res) => {
             const session = SESSIONS.get(sessionToken);
             if (!session) return;
 
-            let innerBrowser;
+            let launched;
             try {
-                const launched = await launchBrowser();
-                innerBrowser = launched.browser;
+                launched = await launchBrowser();
                 const page = launched.page;
 
-                session.browser = innerBrowser;
+                session.browser = launched.browser;
+                session.context = launched.context || null;
                 session.page = page;
+                session.cleanup = launched.close;
+                session.status = 'loading';
+                markTiming(session, 'browserReadyMs');
+                notifySessionUpdated(sessionToken);
 
-                await unifiedIviewFlow(sessionToken, innerBrowser, page, {
+                await unifiedIviewFlow(sessionToken, launched.browser, page, {
                     cookies,
                     passwordBase64,
                     username,
-                    autoSolveEnabled
+                    autoSolveEnabled,
+                    forceLogin
                 });
             } catch (error) {
                 Logger.error(`Queued refresh error for ${username}: ${error.message}`, null, sessionToken);
-                if (innerBrowser) await innerBrowser.close().catch(() => { });
+                if (launched && typeof launched.close === 'function') {
+                    await launched.close().catch(() => { });
+                }
                 session.status = 'error';
                 session.error = error.message;
+                flushTimingLog(session, sessionToken, { status: 'error' });
+                notifySessionUpdated(sessionToken);
 
                 queueStatisticsUpdate(username, { failedRefreshCount: 1 }, params);
             }
@@ -1983,10 +2139,11 @@ app.post('/api/solve-captcha', async (req, res) => {
     }
 
     try {
-        const { browser, page, captchaFrame } = session;
+        const { page, captchaFrame } = session;
 
         await submitCaptchaAndVerify(page, captchaFrame, answer, token);
-        executeAsyncScrape(token, browser, page);
+        markTiming(session, 'captchaSolvedMs');
+        executeAsyncScrape(token, page);
 
         const currentCookies = await page.cookies();
         return res.json({
@@ -1996,7 +2153,7 @@ app.post('/api/solve-captcha', async (req, res) => {
             cookies: currentCookies
         });
     } catch (error) {
-        if (session && session.browser && !session.browser.isConnected()) {
+        if (session && session.page && session.page.isClosed && session.page.isClosed()) {
             await closeSession(token);
             return res.status(500).json({ error: 'Browser session lost' });
         }
@@ -2026,45 +2183,66 @@ app.post('/api/solve-captcha', async (req, res) => {
 
 app.get('/api/status', (req, res) => {
     const { token } = getParams(req);
+    const waitMsRaw = parseNonNegativeInt(req.query && req.query.waitMs, 0);
+    const waitMs = Math.min(waitMsRaw, STATUS_LONG_POLL_TIMEOUT_MS);
     if (!token) {
         return res.status(400).json({ error: 'Missing token' });
     }
 
+    const respondWithSession = (session) => {
+        if (!session) {
+            return res.json({ status: 'expired' });
+        }
+
+        touchSessionStatusPoll(token);
+
+        if (session.status === 'completed') {
+            const result = session.result;
+            return res.json({
+                status: 'completed',
+                grades: result.grades || [],
+                studentInfo: result.studentInfo || {},
+                headers: result.headers || [],
+                cookies: result.cookies || []
+            });
+        }
+
+        if (session.status === 'manual_captcha') {
+            return res.json({
+                status: 'manual_captcha',
+                token,
+                captchaImage: session.captchaImage,
+                message: session.message
+            });
+        }
+
+        if (session.status === 'error') {
+            const error = session.error;
+            if (typeof session.cleanup === 'function') {
+                session.cleanup().catch(() => { });
+                session.cleanup = null;
+            }
+            SESSIONS.delete(token);
+            return res.json({ status: 'error', error });
+        }
+
+        return res.json({ status: session.status || 'loading' });
+    };
+
     const session = SESSIONS.get(token);
-
-    if (!session) {
-        return res.json({ status: 'expired' });
-    }
-
+    if (!session) return respondWithSession(null);
     touchSessionStatusPoll(token);
 
-    if (session.status === 'completed') {
-        const result = session.result;
-        return res.json({
-            status: 'completed',
-            grades: result.grades || [],
-            studentInfo: result.studentInfo || {},
-            headers: result.headers || [],
-            cookies: result.cookies || []
-        });
-    }
+    const shouldWait = waitMs > 0 && (session.status === 'loading' || session.status === 'queued');
+    if (!shouldWait) return respondWithSession(session);
 
-    if (session.status === 'manual_captcha') {
-        return res.json({
-            status: 'manual_captcha',
-            token,
-            captchaImage: session.captchaImage,
-            message: session.message
-        });
-    }
-
-    if (session.status === 'error') {
-        const error = session.error;
-        SESSIONS.delete(token);
-        return res.json({ status: 'error', error });
-    }
-
-    return res.json({ status: session.status || 'loading' });
+    return waitForSessionUpdate(token, waitMs).then(() => {
+        const latest = SESSIONS.get(token);
+        return respondWithSession(latest || null);
+    }).catch(() => {
+        const latest = SESSIONS.get(token);
+        return respondWithSession(latest || null);
+    });
 });
 
 app.post('/api/refresh-captcha', async (req, res) => {
@@ -2093,10 +2271,7 @@ app.post('/api/logout', async (req, res) => {
 
     for (const [token, session] of SESSIONS.entries()) {
         if (!username || session.username === username) {
-            if (session.browser) {
-                await session.browser.close().catch(() => { });
-            }
-            SESSIONS.delete(token);
+            await closeSession(token);
         }
     }
 
@@ -2405,6 +2580,9 @@ async function shutdownGracefully(signal) {
 
     if (mongoState.client) {
         await mongoState.client.close().catch(() => { });
+    }
+    if (sharedBrowser && sharedBrowser.isConnected && sharedBrowser.isConnected()) {
+        await sharedBrowser.close().catch(() => { });
     }
 
     process.exit(0);

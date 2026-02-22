@@ -99,7 +99,7 @@ const App: React.FC = () => {
   const isProgrammaticBack = useRef(false);
   const loginInFlightRef = useRef(false);
   const refreshKickoffRef = useRef(false);
-  const pollIntervalRef = useRef<number | null>(null);
+  const pollAbortRef = useRef<AbortController | null>(null);
   const sessionVersionRef = useRef(0);
 
   const [darkMode, setDarkMode] = useState(() => {
@@ -298,27 +298,21 @@ const App: React.FC = () => {
 
     const storedUser = localStorage.getItem('up_user');
     const storedPass = localStorage.getItem('up_pass');
-    const storedCookies = localStorage.getItem('up_session_cookies');
 
     if (storedUser && storedPass) {
       setActiveUsername(storedUser);
       setSessionPasswordBase64(storedPass);
       setHasCredentials(true);
       setIsAutoLoggingIn(true);
-
-      if (storedCookies) {
-        refreshGrades(true);
-      } else {
-        handleLogin({ username: storedUser, pass: atob(storedPass), isAuto: true, isBackground: true, remember: true });
-      }
+      refreshGrades(true);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const stopPolling = () => {
-    if (pollIntervalRef.current !== null) {
-      window.clearInterval(pollIntervalRef.current);
-      pollIntervalRef.current = null;
+    if (pollAbortRef.current) {
+      pollAbortRef.current.abort();
+      pollAbortRef.current = null;
     }
   };
 
@@ -329,15 +323,20 @@ const App: React.FC = () => {
   const pollStatus = async (pollToken: string) => {
     stopPolling();
     const requestVersion = sessionVersionRef.current;
+    const controller = new AbortController();
+    pollAbortRef.current = controller;
 
-    const interval = window.setInterval(async () => {
+    while (!controller.signal.aborted) {
       if (requestVersion !== sessionVersionRef.current) {
         stopPolling();
         return;
       }
 
       try {
-        const res = await axios.get(`${API_URL}/status?token=${pollToken}`);
+        const res = await axios.get(`${API_URL}/status`, {
+          params: { token: pollToken, waitMs: 8000 },
+          signal: controller.signal,
+        });
         if (requestVersion !== sessionVersionRef.current) return;
 
         if (res.data.status === 'completed') {
@@ -350,6 +349,7 @@ const App: React.FC = () => {
           processAndSetData(res.data.grades || [], res.data.studentInfo, res.data.headers);
           setLoading(false);
           setBackgroundLoading(false);
+          return;
         } else if (res.data.status === 'manual_captcha') {
           stopPolling();
           setCaptchaImage(res.data.captchaImage);
@@ -357,11 +357,13 @@ const App: React.FC = () => {
           if (res.data.token) setToken(res.data.token);
           setLoading(false);
           setBackgroundLoading(false);
+          return;
         } else if (res.data.status === 'error') {
           stopPolling();
           setError(res.data.error || 'Sync failed.');
           setLoading(false);
           setBackgroundLoading(false);
+          return;
         } else if (res.data.status === 'expired') {
           stopPolling();
           setCaptchaImage(null);
@@ -370,16 +372,20 @@ const App: React.FC = () => {
           setBackgroundLoading(false);
           setIsAutoLoggingIn(false);
           setError('Session expired.');
+          return;
         }
-      } catch {
+      } catch (err: unknown) {
         if (requestVersion !== sessionVersionRef.current) return;
+        const maybeCanceled = err as { code?: string; name?: string };
+        if (controller.signal.aborted || maybeCanceled?.code === 'ERR_CANCELED' || maybeCanceled?.name === 'CanceledError') {
+          return;
+        }
         stopPolling();
         setLoading(false);
         setBackgroundLoading(false);
+        return;
       }
-    }, 500);
-
-    pollIntervalRef.current = interval;
+    }
   };
 
 
@@ -446,7 +452,6 @@ const App: React.FC = () => {
     isBackground?: boolean;
     remember?: boolean;
   }) => {
-    const requestVersion = sessionVersionRef.current;
     if (loginInFlightRef.current) return;
     loginInFlightRef.current = true;
 
@@ -460,58 +465,29 @@ const App: React.FC = () => {
     setCaptchaMessage(undefined);
 
     try {
-      const res = await axios.post(`${API_URL}/login`, {
-        username,
-        password: pass,
-        deviceId,
-        deviceModel,
-      });
-      if (requestVersion !== sessionVersionRef.current) {
-        loginInFlightRef.current = false;
-        return;
+      setHasCredentials(true);
+      setActiveUsername(username);
+
+      const passBase64 = btoa(pass);
+      setSessionPasswordBase64(passBase64);
+      localStorage.removeItem('up_session_cookies');
+
+      if (remember) {
+        localStorage.setItem('up_user', username);
+        localStorage.setItem('up_pass', passBase64);
+      } else {
+        localStorage.removeItem('up_user');
+        localStorage.removeItem('up_pass');
       }
 
-      if (res.data.success) {
-        setHasCredentials(true);
-        setActiveUsername(username);
+      setLoading(false);
+      setBackgroundLoading(false);
 
-        const passBase64 = btoa(pass);
-        setSessionPasswordBase64(passBase64);
-
-        if (remember) {
-          localStorage.setItem('up_user', username);
-          localStorage.setItem('up_pass', passBase64);
-        } else {
-          localStorage.removeItem('up_user');
-          localStorage.removeItem('up_pass');
-        }
-
-        if (res.data.cookies) {
-          localStorage.setItem('up_session_cookies', JSON.stringify(res.data.cookies));
-        }
-
-        setLoading(false);
-        setBackgroundLoading(false);
-
-        refreshGrades(true);
-      }
+      refreshGrades(true, { username, passwordBase64: passBase64 });
       loginInFlightRef.current = false;
     } catch (err: unknown) {
-      if (requestVersion !== sessionVersionRef.current) {
-        loginInFlightRef.current = false;
-        return;
-      }
-
       const httpErr = err as { response?: { data?: { error?: string }; status?: number } };
       const errorMsg = httpErr.response?.data?.error || 'Login failed. Please check credentials.';
-
-      if (httpErr.response?.status === 401 && (
-        errorMsg.includes('Wrong password') ||
-        errorMsg.includes('Unknown username') ||
-        errorMsg.includes('Invalid credentials')
-      )) {
-        handleLogout(username);
-      }
 
       if (!isAuto) {
         setError(errorMsg);
@@ -534,23 +510,22 @@ const App: React.FC = () => {
     }
   };
 
-  const refreshGrades = async (isBackground = false) => {
+  const refreshGrades = async (
+    isBackground = false,
+    overrides?: { username?: string; passwordBase64?: string }
+  ) => {
     const requestVersion = sessionVersionRef.current;
     if (refreshKickoffRef.current) return;
     if (loading || backgroundLoading) return;
     refreshKickoffRef.current = true;
 
     const storedCookies = localStorage.getItem('up_session_cookies');
-    if (!storedCookies) {
-      const storedUser = localStorage.getItem('up_user');
-      const storedPass = localStorage.getItem('up_pass');
-      if (storedUser && storedPass) {
-        refreshKickoffRef.current = false;
-        return handleLogin({ username: storedUser, pass: atob(storedPass), isAuto: true, isBackground, remember: true });
-      }
+    const storedUser = overrides?.username || activeUsername || localStorage.getItem('up_user') || '';
+    const passwordBase64 = overrides?.passwordBase64 || getPasswordBase64();
+    if (!storedUser || !passwordBase64) {
       refreshKickoffRef.current = false;
       await handleLogout();
-      setError('No session cookies. Please login first.');
+      setError('Missing credentials. Please login first.');
       return;
     }
 
@@ -562,11 +537,10 @@ const App: React.FC = () => {
     setError(null);
 
     try {
-      const username = activeUsername || localStorage.getItem('up_user') || '';
       const res = await axios.post(`${API_URL}/refresh-grades`, {
-        cookies: JSON.parse(storedCookies),
-        username,
-        passwordBase64: getPasswordBase64(),
+        cookies: storedCookies ? JSON.parse(storedCookies) : [],
+        username: storedUser,
+        passwordBase64,
         deviceId,
         deviceModel,
         autoSolveEnabled,
@@ -588,22 +562,6 @@ const App: React.FC = () => {
       }
 
       const httpErr = err as { response?: { data?: { error?: string; expired?: boolean }; status?: number } };
-      if (httpErr.response?.status === 401 && httpErr.response?.data?.expired) {
-        const storedUser = localStorage.getItem('up_user');
-        const storedPass = localStorage.getItem('up_pass');
-
-        if (storedUser && storedPass) {
-          localStorage.removeItem('up_session_cookies');
-          refreshKickoffRef.current = false;
-          return handleLogin({ username: storedUser, pass: atob(storedPass), isAuto: true, isBackground, remember: true });
-        }
-
-        refreshKickoffRef.current = false;
-        await handleLogout();
-        setError('Session expired. Please login again.');
-        return;
-      }
-
       if (!navigator.onLine) {
         if (grades.length > 0) {
           setError('You\'re offline. Showing cached grades.');

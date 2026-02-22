@@ -206,31 +206,19 @@ const scrapeStudentInfo = async (page) => {
                 }
             }
 
-            // 2. Try generic traversal if no ID link found
-            const allElements = Array.from(document.querySelectorAll('*'));
-            for (const el of allElements) {
-                const text = (el.innerText || '').toLowerCase();
-                if (searchTexts.some(st => text.includes(st.toLowerCase()))) {
-                    let current = el;
-                    // Look around for a number
-                    // 1. Next Sibling
-                    if (current.nextElementSibling) {
-                        const nextText = current.nextElementSibling.innerText || current.nextElementSibling.value || '';
-                        if (/^\d{1,3}([.,]\d+)?\s*$/.test(nextText.trim())) return nextText.trim();
-                    }
-                    // 2. Parent's Next Sibling
-                    if (current.parentElement && current.parentElement.nextElementSibling) {
-                        const parentNextText = current.parentElement.nextElementSibling.innerText || current.parentElement.nextElementSibling.value || '';
-                        if (/^\d{1,3}([.,]\d+)?\s*$/.test(parentNextText.trim())) return parentNextText.trim();
-                    }
-                    // 3. Children of Parent
-                    if (current.parentElement) {
-                        const inputs = current.parentElement.querySelectorAll('input, span, div');
-                        for (const inp of inputs) {
-                            const val = inp.value || inp.innerText || '';
-                            if (val && val !== text && /^\d{1,3}([.,]\d+)?\s*$/.test(val.trim())) return val.trim();
-                        }
-                    }
+            // 2. Lightweight row/cell scan fallback (avoids full DOM '*' scan)
+            const rows = Array.from(document.querySelectorAll('tr, .urSTRow, .lsFormRow')).slice(0, 220);
+            for (const row of rows) {
+                const rowText = (row.innerText || '').toLowerCase();
+                const matched = isExact
+                    ? searchTexts.some(st => rowText.trim() === st.toLowerCase())
+                    : searchTexts.some(st => rowText.includes(st.toLowerCase()));
+                if (!matched) continue;
+
+                const candidates = row.querySelectorAll('td, th, span, input, div.lsTextView, .lsTextView--design-standard');
+                for (const candidate of candidates) {
+                    const value = (candidate.value || candidate.innerText || '').trim();
+                    if (/^\d{1,3}([.,]\d+)?\s*$/.test(value)) return value;
                 }
             }
             return '';
