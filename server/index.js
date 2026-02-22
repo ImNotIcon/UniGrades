@@ -466,8 +466,8 @@ async function initMongo() {
     }
 }
 
-function defaultStatsDocument(username) {
-    return {
+function defaultStatsDocument(username, excludedCounterKeys = new Set()) {
+    const doc = {
         _id: username,
         gradeRefreshCount: 0,
         gradeRefreshCountCaptcha: 0,
@@ -479,6 +479,12 @@ function defaultStatsDocument(username) {
         failedLoginCount: 0,
         devices: []
     };
+
+    for (const key of excludedCounterKeys) {
+        delete doc[key];
+    }
+
+    return doc;
 }
 
 const STATS_INCREMENT_KEYS = [
@@ -594,6 +600,60 @@ function queueStatisticsUpdate(username, increments = {}, options = {}) {
     }
 }
 
+function isRepairableStatsWriteError(error) {
+    const message = safeString(error && error.message ? error.message : '', { maxLength: 512 }).toLowerCase();
+    if (!message) return false;
+
+    return message.includes('non-numeric type')
+        || message.includes('must be an array')
+        || message.includes('array updates to non-array');
+}
+
+async function repairMalformedStatisticsDocument(username) {
+    if (!isMongoEnabled() || !isValidIdentifier(username)) return false;
+    const cols = getMongoCollections();
+    if (!cols) return false;
+
+    const projection = { devices: 1 };
+    for (const key of STATS_INCREMENT_KEYS) {
+        projection[key] = 1;
+    }
+
+    const doc = await cols.statistics.findOne({ _id: username }, { projection });
+    if (!doc) return false;
+
+    const fieldsToRepair = [];
+    const setPatch = {};
+
+    for (const key of STATS_INCREMENT_KEYS) {
+        const currentValue = doc[key];
+        if (typeof currentValue !== 'number' || !Number.isFinite(currentValue) || currentValue < 0) {
+            setPatch[key] = parseNonNegativeInt(currentValue, 0);
+            fieldsToRepair.push(key);
+        }
+    }
+
+    if (!Array.isArray(doc.devices)) {
+        setPatch.devices = [];
+        fieldsToRepair.push('devices');
+    }
+
+    if (fieldsToRepair.length === 0) return false;
+
+    setPatch.updatedAt = new Date();
+    await cols.statistics.updateOne(
+        { _id: username },
+        { $set: setPatch }
+    );
+
+    Logger.warn(
+        `Repaired malformed statistics fields: ${fieldsToRepair.join(', ')}.`,
+        null,
+        username
+    );
+    return true;
+}
+
 async function applyStatsAggregateToMongo(username, aggregate) {
     if (!isMongoEnabled() || !isValidIdentifier(username)) return;
     const cols = getMongoCollections();
@@ -601,8 +661,9 @@ async function applyStatsAggregateToMongo(username, aggregate) {
 
     const now = new Date();
     const cleanIncrements = sanitizeStatsIncrements(aggregate && aggregate.increments);
+    const incrementedKeys = new Set(Object.keys(cleanIncrements));
     const baseUpdate = {
-        $setOnInsert: defaultStatsDocument(username),
+        $setOnInsert: defaultStatsDocument(username, incrementedKeys),
         $set: { updatedAt: now }
     };
 
@@ -678,6 +739,7 @@ async function flushStatsAggregateWithRetry(username, aggregate) {
     const deviceCount = aggregate && aggregate.devices instanceof Map ? aggregate.devices.size : 0;
     const counterCount = aggregate ? Object.keys(aggregate.increments || {}).length : 0;
     const eventCount = aggregate && Number.isFinite(aggregate.eventCount) ? aggregate.eventCount : 0;
+    let repairAttempted = false;
 
     for (let attempt = 0; attempt <= retryCount; attempt++) {
         try {
@@ -691,6 +753,28 @@ async function flushStatsAggregateWithRetry(username, aggregate) {
             return;
         } catch (error) {
             STATS_QUEUE_METRICS.failed += 1;
+
+            if (!repairAttempted && isRepairableStatsWriteError(error)) {
+                repairAttempted = true;
+                try {
+                    const repaired = await repairMalformedStatisticsDocument(username);
+                    if (repaired) {
+                        Logger.warn(
+                            `Stats write failed due to malformed document; repaired and retrying immediately: ${error.message}`,
+                            null,
+                            username
+                        );
+                        continue;
+                    }
+                } catch (repairError) {
+                    Logger.error(
+                        `Failed to repair malformed statistics document: ${repairError.message}`,
+                        null,
+                        username
+                    );
+                }
+            }
+
             if (attempt < retryCount) {
                 STATS_QUEUE_METRICS.retried += 1;
                 const retryDelay = MONGO_STATS_QUEUE_RETRY_BASE_MS * (2 ** attempt);
