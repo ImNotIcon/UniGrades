@@ -125,7 +125,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     const [consentAccepted, setConsentAccepted] = useState(false);
 
     const canUsePush = useMemo(() => supportsPush(), []);
-    const pushSettingsAvailable = mongoEnabled && pushEnabled;
+    const isHttpsPage = useMemo(
+        () => (typeof window !== 'undefined' ? window.location.protocol === 'https:' : false),
+        []
+    );
+    const pushSettingsConfigured = mongoEnabled && pushEnabled;
+    const pushSettingsAvailable = pushSettingsConfigured && isHttpsPage;
     const settingsCacheKey = useMemo(
         () => (username ? `${SETTINGS_CACHE_PREFIX}${username}` : ''),
         [username]
@@ -350,8 +355,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     };
 
     const handleEnableNotifications = async () => {
-        if (!pushSettingsAvailable) {
+        if (!pushSettingsConfigured) {
             window.alert('Push notifications are not configured on this server.');
+            return;
+        }
+        if (!isHttpsPage) {
+            window.alert('Push notifications are only available over HTTPS.');
             return;
         }
         if (!ensureOnlineForRemoteChange()) {
@@ -586,7 +595,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
                     {!pushSettingsAvailable ? (
                         <div className={`rounded-2xl p-4 border text-sm ${darkMode ? 'border-gray-700 bg-gray-800/60 text-gray-300' : 'border-gray-100 bg-gray-50 text-gray-600'}`}>
-                            Push notification settings are hidden because MongoDB and VAPID push configuration are not both available on this server.
+                            {isHttpsPage
+                                ? 'Push notification settings are hidden because MongoDB and VAPID push configuration are not both available on this server.'
+                                : 'Push notification settings are hidden on non-HTTPS pages. Open this app over HTTPS to manage notifications.'}
                         </div>
                     ) : (
                         <>
