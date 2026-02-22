@@ -1708,7 +1708,7 @@ async function fetchGradesForNotifications(username, passwordPlain) {
 
             await authenticatePortalLogin(page, username, passwordPlain, 'notifier');
 
-            const result = await unifiedIviewFlow('notifier', browser, page, {
+            const result = await unifiedIviewFlow('notifier', launched.browser, page, {
                 isBackground: true,
                 username,
                 passwordPlain
