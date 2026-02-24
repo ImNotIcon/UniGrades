@@ -17,6 +17,8 @@ body {
   min-height: 100vh;
   background-color: #f3f4f6;
   color: #1f2937;
+  overflow: hidden;
+  overscroll-behavior-y: none;
 }
 
 .dark body {

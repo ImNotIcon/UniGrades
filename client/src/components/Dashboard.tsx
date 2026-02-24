@@ -1134,13 +1134,13 @@ export const Dashboard: React.FC<DashboardProps> = ({
         <>
             <div
                 id="dashboard-scroll-shell"
-                className={`h-[100dvh] w-full relative overflow-hidden overscroll-y-none transition-colors duration-300 ${darkMode ? 'bg-gray-900 text-white' : 'bg-gray-50 text-gray-900'} ${selectedCourseData ? 'pointer-events-none select-none' : ''}`}
+                className={`h-[100svh] min-h-[100svh] w-full relative overflow-hidden overscroll-y-none transition-colors duration-300 ${darkMode ? 'bg-gray-900 text-white' : 'bg-gray-50 text-gray-900'} ${selectedCourseData ? 'pointer-events-none select-none' : ''}`}
             >
                 {/* Home Tab Container */}
                 <div
                     id="dashboard-home-scroll"
                     ref={homeScrollRef}
-                    className={`absolute inset-0 overflow-y-auto overscroll-y-contain [touch-action:pan-y] [-webkit-overflow-scrolling:touch] pt-0 pb-28 transition-opacity duration-300 ${activeTab === 'home' ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'}`}
+                    className={`h-full overflow-y-auto overscroll-y-contain [touch-action:pan-y] [transform:translateZ(0)] pt-0 pb-28 ${activeTab === 'home' ? 'block' : 'hidden'}`}
                 >
                     <header className={`${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-100'} shadow-sm sticky top-0 z-40 border-b transition-colors duration-300`}>
                         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center">
@@ -1206,7 +1206,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 <div
                     id="dashboard-grades-scroll"
                     ref={gradesScrollRef}
-                    className={`absolute inset-0 overflow-y-auto overscroll-y-contain [touch-action:pan-y] [-webkit-overflow-scrolling:touch] pt-0 pb-28 transition-opacity duration-300 ${activeTab === 'grades' ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'}`}
+                    className={`h-full overflow-y-auto overscroll-y-contain [touch-action:pan-y] [transform:translateZ(0)] pt-0 pb-28 ${activeTab === 'grades' ? 'block' : 'hidden'}`}
                 >
                     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-6">
                         <GradesTab
