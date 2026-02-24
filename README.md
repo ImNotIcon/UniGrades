@@ -60,8 +60,17 @@ UniGrades is a modern, responsive web application that allows students of the Un
     HEADLESS=true
     DEBUG_SCREENSHOTS=false
 
-    # Required for Automatic Captcha Solving
+    # Automatic captcha solving
+    # If both Gemini and Ollama are unset, auto-solve is unavailable.
+    # If both are set:
+    # - User flow uses Gemini first (falls back to Ollama on Gemini errors)
+    # - Subscription/background flow uses Ollama only
     GEMINI_API_KEY=your_gemini_api_key
+    GEMINI_MODELS=gemini-2.5-flash-lite,gemini-2.5-flash,gemini-3-flash-preview
+
+    # Set OLLAMA_MODEL to enable Ollama
+    OLLAMA_MODEL=glm-ocr:q8_0
+    OLLAMA_API_URL=http://localhost:11434/api/generate
 
     # Push Notifications (VAPID Keys)
     VAPID_PUBLIC_KEY=your_public_key

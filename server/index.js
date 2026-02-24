@@ -9,7 +9,7 @@ const webpush = require('web-push');
 const { MongoClient } = require('mongodb');
 
 const { scrapeGrades } = require('./scraper');
-const { solveCaptcha } = require('./captcha_solver');
+const { solveCaptcha, isAutoSolveConfigured } = require('./captcha_solver');
 
 const app = express();
 app.use(cors());
@@ -267,7 +267,6 @@ if (process.env.BROWSER_PATH) {
 }
 
 const hasVapidConfig = !!(process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY);
-const hasGeminiConfig = !!(process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY.trim());
 const isAutoSolveWhitelistEnabled = ['1', 'true', 'yes', 'on'].includes(
     (process.env.AUTOSOLVE_USERNAME_WHITELIST_ENABLED || '').trim().toLowerCase()
 );
@@ -1614,7 +1613,9 @@ async function unifiedIviewFlow(token, browser, page, {
         let currentFrame = captchaFrame;
 
         const autoSolveGloballyEnabled = process.env.DISABLE_AUTO_CAPTCHA !== 'true';
+        const autoSolveProviderConfigured = isAutoSolveConfigured();
         const canAutoSolve = autoSolveGloballyEnabled
+            && autoSolveProviderConfigured
             && parseBoolean(autoSolveEnabled, true)
             && isUsernameAllowedForAutoSolveAndPush(effectiveUsername);
 
@@ -1622,7 +1623,7 @@ async function unifiedIviewFlow(token, browser, page, {
             let allowSecondAttempt = false;
 
             if (!isBackground && !(await waitIfSessionPaused(token))) return;
-            const firstAutoText = await solveCaptcha(currentCaptchaBuffer, contextToken);
+            const firstAutoText = await solveCaptcha(currentCaptchaBuffer, contextToken, { isBackground });
             if (firstAutoText) {
                 Logger.info(`Auto-solving attempt 1/2: ${firstAutoText}`, null, contextToken);
                 try {
@@ -1647,7 +1648,7 @@ async function unifiedIviewFlow(token, browser, page, {
                 if (refreshedBuffer) {
                     currentCaptchaBuffer = refreshedBuffer;
                     currentFrame = getActiveFrame(page, currentFrame) || currentFrame;
-                    const secondAutoText = await solveCaptcha(currentCaptchaBuffer, contextToken);
+                    const secondAutoText = await solveCaptcha(currentCaptchaBuffer, contextToken, { isBackground });
                     if (secondAutoText) {
                         Logger.info(`Auto-solving attempt 2/2: ${secondAutoText}`, null, contextToken);
                         try {
@@ -1968,6 +1969,7 @@ setInterval(() => {
 
 app.get('/api/features', (req, res) => {
     const mongoEnabled = isMongoEnabled();
+    const autoSolveGloballyEnabled = process.env.DISABLE_AUTO_CAPTCHA !== 'true';
     const params = getParams(req);
     const usernameAllowed = params.username
         ? isUsernameAllowedForAutoSolveAndPush(params.username)
@@ -1976,7 +1978,7 @@ app.get('/api/features', (req, res) => {
         mongoEnabled,
         pushEnabled: mongoEnabled && hasVapidConfig,
         vapidAvailable: hasVapidConfig,
-        autoSolveAvailable: hasGeminiConfig && usernameAllowed,
+        autoSolveAvailable: autoSolveGloballyEnabled && isAutoSolveConfigured() && usernameAllowed,
         usernameAllowedForAutoSolveAndPush: usernameAllowed,
         autoSolveWhitelistEnabled: isAutoSolveWhitelistEnabled,
         autoSolveWhitelistActive: isAutoSolveWhitelistActive
