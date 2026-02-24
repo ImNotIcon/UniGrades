@@ -110,6 +110,12 @@ const ectsInt = (val: string | undefined) => {
 };
 
 const hasVisibleGrade = (grade: string | undefined) => typeof grade === 'string' && grade.trim() !== '';
+const normalizeAverageGrade = (grade: string | undefined) => {
+    if (!grade || !grade.trim()) return '';
+    const value = parseFloat(grade.replace(',', '.'));
+    if (!Number.isFinite(value) || value <= 0) return '';
+    return grade;
+};
 
 const NoGradePill: React.FC<{ darkMode: boolean; compact?: boolean; gauge?: boolean }> = ({ darkMode, compact = false, gauge = false }) => (
     <span
@@ -220,7 +226,7 @@ const HomeTab: React.FC<{
             <div className="grid grid-cols-1 md:grid-cols-6 gap-6">
                 <div className="space-y-6 col-span-1 md:col-span-3">
                     <div className={`rounded-3xl shadow-sm border p-6 relative overflow-hidden transition-colors duration-300 flex flex-col items-center justify-center ${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-100'}`}>
-                        <GradeGauge grade={studentInfo?.average || ''} statusColor="text-indigo-500" darkMode={darkMode} size="medium" />
+                        <GradeGauge grade={normalizeAverageGrade(studentInfo?.average)} statusColor="text-indigo-500" darkMode={darkMode} size="medium" />
                     </div>
 
                     <div className={`rounded-3xl shadow-sm border p-6 flex flex-row items-center justify-around transition-colors duration-300 ${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-100'}`}>

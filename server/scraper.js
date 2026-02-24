@@ -153,7 +153,7 @@ const scrapeStudentInfo = async (page) => {
             const compact = (value || '').toString().trim().replace(/\s+/g, '').replace(',', '.');
             if (!/^\d{1,2}(\.\d{1,3})?$/.test(compact)) return '';
             const n = Number.parseFloat(compact);
-            if (!Number.isFinite(n) || n < 0 || n > 10) return '';
+            if (!Number.isFinite(n) || n <= 0 || n > 10) return '';
             return compact;
         };
 
@@ -192,28 +192,38 @@ const scrapeStudentInfo = async (page) => {
             const text = normalizeText(table.innerText);
             return text.includes('δείκτες απόδοσης') || text.includes('δεικτες αποδοσης') || text.includes('performance indicators');
         });
+        let sawAverageLabelInKpi = false;
 
         for (const table of kpiTables) {
             const rows = Array.from(table.querySelectorAll('tbody[id$="contentTBody"] tr, tbody tr, tr'));
             for (const row of rows) {
                 const cells = Array.from(row.querySelectorAll('td, th'));
-                if (cells.length < 3) continue;
+                if (cells.length < 2) continue;
 
-                const metricLabel = normalizeText(cells[1] && cells[1].innerText);
-                if (!metricLabel) continue;
-                if (!isAverageGradeLabel(metricLabel)) continue;
-
-                const candidate = parseNumericGrade(cells[2] && cells[2].innerText);
-                if (candidate) {
-                    average = candidate;
-                    break;
+                let metricLabelIndex = -1;
+                for (let i = 0; i < cells.length; i++) {
+                    if (isAverageGradeLabel(cells[i] && cells[i].innerText)) {
+                        metricLabelIndex = i;
+                        sawAverageLabelInKpi = true;
+                        break;
+                    }
                 }
+                if (metricLabelIndex === -1) continue;
+
+                const valueCell = cells[metricLabelIndex + 1];
+                if (valueCell) {
+                    const candidate = parseNumericGrade(valueCell.innerText);
+                    if (candidate) average = candidate;
+                }
+                if (average) break;
             }
             if (average) break;
         }
 
-        // Fallback if KPI parsing above misses due markup variations.
-        if (!average) {
+        // Fallback only when KPI table is not present at all.
+        // If KPI exists and its value is empty, keep average empty instead of
+        // accidentally picking unrelated numbers elsewhere (e.g. "1").
+        if (!average && kpiTables.length === 0 && !sawAverageLabelInKpi) {
             const rows = Array.from(document.querySelectorAll('tr')).slice(0, 400);
             for (const row of rows) {
                 const rowText = normalizeText(row.innerText);
@@ -233,12 +243,10 @@ const scrapeStudentInfo = async (page) => {
                 // Only scan cells to the right of the matching label to avoid picking
                 // unrelated numbers (e.g. semester/order index "1").
                 if (metricLabelIndex !== -1) {
-                    for (let i = metricLabelIndex + 1; i < cells.length; i++) {
-                        const rightCandidate = parseNumericGrade(cells[i] && cells[i].innerText);
-                        if (rightCandidate) {
-                            average = rightCandidate;
-                            break;
-                        }
+                    const valueCell = cells[metricLabelIndex + 1];
+                    if (valueCell) {
+                        const rightCandidate = parseNumericGrade(valueCell.innerText);
+                        if (rightCandidate) average = rightCandidate;
                     }
                 }
 
@@ -334,6 +342,14 @@ async function scrapeGrades(page, token) {
                 headers = res.headers;
             }
             break;
+        }
+    }
+
+    // Final safety: treat non-positive averages as missing.
+    if (studentInfo && typeof studentInfo.average === 'string') {
+        const avg = Number.parseFloat(studentInfo.average.replace(',', '.'));
+        if (!Number.isFinite(avg) || avg <= 0) {
+            studentInfo.average = '';
         }
     }
 
