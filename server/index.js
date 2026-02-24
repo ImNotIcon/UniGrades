@@ -1623,7 +1623,10 @@ async function unifiedIviewFlow(token, browser, page, {
             let allowSecondAttempt = false;
 
             if (!isBackground && !(await waitIfSessionPaused(token))) return;
-            const firstAutoText = await solveCaptcha(currentCaptchaBuffer, contextToken, { isBackground });
+            const firstAutoResult = await solveCaptcha(currentCaptchaBuffer, contextToken, { isBackground });
+            const firstAutoText = firstAutoResult && typeof firstAutoResult === 'object'
+                ? firstAutoResult.text
+                : firstAutoResult;
             if (firstAutoText) {
                 Logger.info(`Auto-solving attempt 1/2: ${firstAutoText}`, null, contextToken);
                 try {
@@ -1640,6 +1643,14 @@ async function unifiedIviewFlow(token, browser, page, {
                         throw error;
                     }
                 }
+            } else if (
+                firstAutoResult
+                && typeof firstAutoResult === 'object'
+                && firstAutoResult.provider === 'ollama'
+                && firstAutoResult.shouldRefreshCaptcha
+            ) {
+                allowSecondAttempt = true;
+                Logger.info('Ollama produced non-6-char output. Refreshing captcha for a new image instead of retrying same one.', null, contextToken);
             }
 
             if (allowSecondAttempt) {
@@ -1648,7 +1659,10 @@ async function unifiedIviewFlow(token, browser, page, {
                 if (refreshedBuffer) {
                     currentCaptchaBuffer = refreshedBuffer;
                     currentFrame = getActiveFrame(page, currentFrame) || currentFrame;
-                    const secondAutoText = await solveCaptcha(currentCaptchaBuffer, contextToken, { isBackground });
+                    const secondAutoResult = await solveCaptcha(currentCaptchaBuffer, contextToken, { isBackground });
+                    const secondAutoText = secondAutoResult && typeof secondAutoResult === 'object'
+                        ? secondAutoResult.text
+                        : secondAutoResult;
                     if (secondAutoText) {
                         Logger.info(`Auto-solving attempt 2/2: ${secondAutoText}`, null, contextToken);
                         try {
