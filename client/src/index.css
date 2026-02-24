@@ -63,6 +63,12 @@ body {
   color: rgba(107, 114, 128, 0.85);
 }
 
+/* PullToRefresh's default top-state sets pan-down only.
+   For nested app scrollers, keep normal vertical panning to avoid gesture lockups. */
+.ug-ptr--top {
+  touch-action: pan-y pinch-zoom !important;
+}
+
 .dark .ug-ptr--icon,
 .dark .ug-ptr--text {
   color: rgba(156, 163, 175, 0.9);

@@ -864,13 +864,14 @@ export const Dashboard: React.FC<DashboardProps> = ({
     useEffect(() => {
         if (ptrInstanceRef.current) return;
 
-        PullToRefresh.setPassiveMode(true);
+        PullToRefresh.setPassiveMode(false);
         PullToRefresh.setPointerEventsMode(false);
 
         const instance = PullToRefresh.init({
             classPrefix: 'ug-ptr--',
             mainElement: '#dashboard-scroll-shell',
             triggerElement: '#dashboard-scroll-shell',
+            distIgnore: 10,
             distThreshold: 72,
             distMax: 96,
             distReload: 56,
@@ -888,6 +889,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     : gradesScrollRef.current;
 
                 if (!activeScroller) return false;
+                const maxScrollableY = activeScroller.scrollHeight - activeScroller.clientHeight;
+                if (maxScrollableY < 48) return false;
                 return activeScroller.scrollTop <= 1;
             },
             onRefresh: () => Promise.resolve(refreshRef.current()),
