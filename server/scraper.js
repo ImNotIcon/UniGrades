@@ -138,6 +138,20 @@ const scrapeFrame = async (frame) => {
 
 const scrapeStudentInfo = async (page) => {
     return page.evaluate(() => {
+        const normalizeText = (value) => (value || '')
+            .toString()
+            .trim()
+            .replace(/\s+/g, ' ')
+            .toLowerCase();
+
+        const parseNumericGrade = (value) => {
+            const compact = (value || '').toString().trim().replace(/\s+/g, '').replace(',', '.');
+            if (!/^\d{1,2}(\.\d{1,3})?$/.test(compact)) return '';
+            const n = Number.parseFloat(compact);
+            if (!Number.isFinite(n) || n < 0 || n > 10) return '';
+            return compact;
+        };
+
         let name = '';
         const labels = Array.from(document.querySelectorAll('label, span.lsLabel__text'));
         const nameLabel = labels.find(l => (l.innerText || '').includes('Ονοματεπώνυμο') || (l.innerText || '').includes('Name'));
@@ -166,21 +180,57 @@ const scrapeStudentInfo = async (page) => {
             name = name.split(';')[0].replace(/,/g, '').trim();
         }
 
-        // Average Grade
+        // Average Grade (KPI table: "Δείκτες Απόδοσης")
         let average = '';
-        // Look for "Δείκτες Απόδοσης" table
         const tables = Array.from(document.querySelectorAll('table'));
-        const kpiTable = tables.find(t => t.innerText && t.innerText.includes('Δείκτες Απόδοσης'));
-        if (kpiTable) {
-            const rows = Array.from(kpiTable.querySelectorAll('tr'));
-            const gradeRow = rows.find(r => r.innerText.includes('Βαθμ') && !r.innerText.includes('ECTS'));
-            if (gradeRow) {
-                const cells = Array.from(gradeRow.cells || gradeRow.querySelectorAll('td'));
-                // Assuming cell structure: Name | Type | Value | Scale | ECTS
-                // The value is usually in the 3rd cell (index 2)
-                const valCell = cells.find(c => /^\d+,\d+$/.test(c.innerText.trim()));
-                if (valCell) average = valCell.innerText.trim();
-                else if (cells[2]) average = cells[2].innerText.trim();
+        const kpiTables = tables.filter((table) => {
+            const text = normalizeText(table.innerText);
+            return text.includes('δείκτες απόδοσης') || text.includes('δεικτες αποδοσης') || text.includes('performance indicators');
+        });
+
+        for (const table of kpiTables) {
+            const rows = Array.from(table.querySelectorAll('tbody[id$="contentTBody"] tr, tbody tr, tr'));
+            for (const row of rows) {
+                const cells = Array.from(row.querySelectorAll('td, th'));
+                if (cells.length < 3) continue;
+
+                const metricLabel = normalizeText(cells[1] && cells[1].innerText);
+                if (!metricLabel) continue;
+                if ((!metricLabel.includes('βαθμ') && !metricLabel.includes('grade')) || metricLabel.includes('ects')) continue;
+
+                const candidate = parseNumericGrade(cells[2] && cells[2].innerText);
+                if (candidate) {
+                    average = candidate;
+                    break;
+                }
+            }
+            if (average) break;
+        }
+
+        // Fallback if KPI parsing above misses due markup variations.
+        if (!average) {
+            const rows = Array.from(document.querySelectorAll('tr')).slice(0, 400);
+            for (const row of rows) {
+                const rowText = normalizeText(row.innerText);
+                if ((!rowText.includes('βαθμ') && !rowText.includes('grade')) || rowText.includes('ects')) continue;
+
+                const cells = Array.from(row.querySelectorAll('td, th'));
+                if (cells.length >= 3) {
+                    const fixedColCandidate = parseNumericGrade(cells[2] && cells[2].innerText);
+                    if (fixedColCandidate) {
+                        average = fixedColCandidate;
+                        break;
+                    }
+                }
+
+                for (const cell of cells) {
+                    const looseCandidate = parseNumericGrade(cell && cell.innerText);
+                    if (looseCandidate) {
+                        average = looseCandidate;
+                        break;
+                    }
+                }
+                if (average) break;
             }
         }
 
@@ -257,7 +307,14 @@ async function scrapeGrades(page, token) {
 
             // Scrape info and grades from this specific frame
             const info = await scrapeStudentInfo(f);
-            if (info.name) studentInfo = info;
+            if (info && typeof info === 'object') {
+                studentInfo = {
+                    name: info.name || studentInfo.name,
+                    average: info.average || studentInfo.average,
+                    totalCredits: info.totalCredits || studentInfo.totalCredits,
+                    totalGreekCredits: info.totalGreekCredits || studentInfo.totalGreekCredits
+                };
+            }
 
             const res = await scrapeFrame(f);
             if (res.grades && res.grades.length > 0) {
