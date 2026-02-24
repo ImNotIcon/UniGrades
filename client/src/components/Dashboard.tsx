@@ -864,6 +864,9 @@ export const Dashboard: React.FC<DashboardProps> = ({
     useEffect(() => {
         if (ptrInstanceRef.current) return;
 
+        PullToRefresh.setPassiveMode(true);
+        PullToRefresh.setPointerEventsMode(false);
+
         const instance = PullToRefresh.init({
             classPrefix: 'ug-ptr--',
             mainElement: '#dashboard-scroll-shell',
@@ -885,7 +888,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     : gradesScrollRef.current;
 
                 if (!activeScroller) return false;
-                return activeScroller.scrollTop <= 0;
+                return activeScroller.scrollTop <= 1;
             },
             onRefresh: () => Promise.resolve(refreshRef.current()),
         });
@@ -1131,13 +1134,13 @@ export const Dashboard: React.FC<DashboardProps> = ({
         <>
             <div
                 id="dashboard-scroll-shell"
-                className={`h-screen w-full relative overflow-hidden transition-colors duration-300 ${darkMode ? 'bg-gray-900 text-white' : 'bg-gray-50 text-gray-900'} ${selectedCourseData ? 'pointer-events-none select-none' : ''}`}
+                className={`h-[100dvh] w-full relative overflow-hidden overscroll-y-none transition-colors duration-300 ${darkMode ? 'bg-gray-900 text-white' : 'bg-gray-50 text-gray-900'} ${selectedCourseData ? 'pointer-events-none select-none' : ''}`}
             >
                 {/* Home Tab Container */}
                 <div
                     id="dashboard-home-scroll"
                     ref={homeScrollRef}
-                    className={`absolute inset-0 overflow-y-auto [-webkit-overflow-scrolling:touch] pt-0 pb-28 transition-opacity duration-300 ${activeTab === 'home' ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'}`}
+                    className={`absolute inset-0 overflow-y-auto overscroll-y-contain [touch-action:pan-y] [-webkit-overflow-scrolling:touch] pt-0 pb-28 transition-opacity duration-300 ${activeTab === 'home' ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'}`}
                 >
                     <header className={`${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-100'} shadow-sm sticky top-0 z-40 border-b transition-colors duration-300`}>
                         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center">
@@ -1203,7 +1206,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 <div
                     id="dashboard-grades-scroll"
                     ref={gradesScrollRef}
-                    className={`absolute inset-0 overflow-y-auto [-webkit-overflow-scrolling:touch] pt-0 pb-28 transition-opacity duration-300 ${activeTab === 'grades' ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'}`}
+                    className={`absolute inset-0 overflow-y-auto overscroll-y-contain [touch-action:pan-y] [-webkit-overflow-scrolling:touch] pt-0 pb-28 transition-opacity duration-300 ${activeTab === 'grades' ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'}`}
                 >
                     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-6">
                         <GradesTab

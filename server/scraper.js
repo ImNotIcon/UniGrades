@@ -173,7 +173,7 @@ const scrapeStudentInfo = async (page) => {
         const kpiTable = tables.find(t => t.innerText && t.innerText.includes('Δείκτες Απόδοσης'));
         if (kpiTable) {
             const rows = Array.from(kpiTable.querySelectorAll('tr'));
-            const gradeRow = rows.find(r => r.innerText.includes('Βαθμός') && !r.innerText.includes('ECTS'));
+            const gradeRow = rows.find(r => r.innerText.includes('Βαθμ') && !r.innerText.includes('ECTS'));
             if (gradeRow) {
                 const cells = Array.from(gradeRow.cells || gradeRow.querySelectorAll('td'));
                 // Assuming cell structure: Name | Type | Value | Scale | ECTS

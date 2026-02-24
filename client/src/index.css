@@ -55,6 +55,7 @@ body {
 .ug-ptr--ptr {
   background: transparent;
   box-shadow: none;
+  pointer-events: none;
 }
 
 .ug-ptr--icon,
