@@ -1356,40 +1356,79 @@ async function submitCaptchaAndVerify(page, captchaFrame, answer, token = null) 
         });
     }
 
+    const readResultInDocument = () => {
+        const body = document.body;
+        const text = body ? body.innerText : '';
+        const textUpper = text.toUpperCase();
+        const okIcon = document.querySelector('img[src*="SuccessMessage"], img[src*="WD_M_OK"], img[src*="WD_M_OKAY"]');
+        const errIcon = document.querySelector('img[src*="ErrorMessage"], img[src*="WD_M_ERROR"]');
+        const gradesTable = document.querySelector('table[id*="GRADES"], table[id*="GRADE"], .urST');
+        const hasSuccessText = textUpper.includes('OK!') || textUpper.includes('ΟΚ!') || /\bOK\b/.test(textUpper);
+        const hasErrorText = textUpper.includes('ERROR') || textUpper.includes('ΛΑΘ') || textUpper.includes('INCORRECT CAPTCHA');
+
+        if (okIcon || hasSuccessText || gradesTable) return 'SUCCESS';
+        if (errIcon || hasErrorText) return 'ERROR';
+        return null;
+    };
+
+    const waitForVerification = async (frame, timeout) => {
+        const handle = await frame.waitForFunction(
+            readResultInDocument,
+            { timeout, polling: 90 }
+        );
+        return handle.jsonValue();
+    };
+
+    let result = null;
     try {
-        const result = await page.waitForFunction(() => {
-            const checkDoc = (doc) => {
-                const text = doc.body ? doc.body.innerText : '';
-                const okIcon = doc.querySelector('img[src*="SuccessMessage"], img[src*="WD_M_OK"]');
-                const errIcon = doc.querySelector('img[src*="ErrorMessage"], img[src*="WD_M_ERROR"]');
-                const gradesTable = doc.querySelector('table[id*="GRADES"]');
+        try {
+            result = await waitForVerification(activeFrame, 7000);
+        } catch (error) {
+            const message = safeString(error && error.message ? error.message : '', { maxLength: 300 }).toLowerCase();
+            if (!message.includes('timeout')) throw error;
+        }
 
-                if (okIcon || text.includes('OK!') || text.includes('ΟΚ!') || gradesTable) return 'SUCCESS';
-                if (errIcon || text.includes('ERROR!') || text.includes('Λάθος')) return 'ERROR';
-                return null;
-            };
+        if (!result) {
+            result = await page.waitForFunction(() => {
+                const checkDoc = (doc) => {
+                    const body = doc.body;
+                    const text = body ? body.innerText : '';
+                    const textUpper = text.toUpperCase();
+                    const okIcon = doc.querySelector('img[src*="SuccessMessage"], img[src*="WD_M_OK"], img[src*="WD_M_OKAY"]');
+                    const errIcon = doc.querySelector('img[src*="ErrorMessage"], img[src*="WD_M_ERROR"]');
+                    const gradesTable = doc.querySelector('table[id*="GRADES"], table[id*="GRADE"], .urST');
+                    const hasSuccessText = textUpper.includes('OK!') || textUpper.includes('ΟΚ!') || /\bOK\b/.test(textUpper);
+                    const hasErrorText = textUpper.includes('ERROR') || textUpper.includes('ΛΑΘ') || textUpper.includes('INCORRECT CAPTCHA');
 
-            const mainStatus = checkDoc(document);
-            if (mainStatus) return mainStatus;
+                    if (okIcon || hasSuccessText || gradesTable) return 'SUCCESS';
+                    if (errIcon || hasErrorText) return 'ERROR';
+                    return null;
+                };
 
-            for (let i = 0; i < window.frames.length; i++) {
-                try {
-                    const frameStatus = checkDoc(window.frames[i].document);
-                    if (frameStatus) return frameStatus;
-                } catch (e) {
-                    // cross-origin frame, ignore
+                const mainStatus = checkDoc(document);
+                if (mainStatus) return mainStatus;
+
+                for (let i = 0; i < window.frames.length; i++) {
+                    try {
+                        const frameStatus = checkDoc(window.frames[i].document);
+                        if (frameStatus) return frameStatus;
+                    } catch {
+                        // cross-origin frame, ignore
+                    }
                 }
-            }
-            return null;
-        }, { timeout: 25000, polling: 175 }).then(h => h.jsonValue());
+                return null;
+            }, { timeout: 5000, polling: 120 }).then(h => h.jsonValue());
+        }
 
         if (result === 'SUCCESS') {
             Logger.info('Verification Success!', null, token);
             return true;
-        } else if (result === 'ERROR') {
+        }
+        if (result === 'ERROR') {
             Logger.warn('Verification Error flagged by portal.', null, token);
             throw new Error('Incorrect captcha code. Please try again.');
         }
+        throw new Error('Verification timed out (no success indicator found)');
     } catch (error) {
         if (error.message.includes('timeout')) {
             await debugScreenshot(page, 'verification_timeout');
@@ -1555,6 +1594,7 @@ async function unifiedIviewFlow(token, browser, page, {
 
     const effectiveUsername = session ? session.username : username;
     const contextToken = isBackground ? 'notifier' : token;
+    let autoSolveFallbackMessage = '';
 
     try {
         if (session) markTiming(session, 'flowStartMs');
@@ -1620,65 +1660,74 @@ async function unifiedIviewFlow(token, browser, page, {
             && isUsernameAllowedForAutoSolveAndPush(effectiveUsername);
 
         if (canAutoSolve) {
-            let allowSecondAttempt = false;
+            try {
+                let allowSecondAttempt = false;
 
-            if (!isBackground && !(await waitIfSessionPaused(token))) return;
-            const firstAutoResult = await solveCaptcha(currentCaptchaBuffer, contextToken, { isBackground });
-            const firstAutoText = firstAutoResult && typeof firstAutoResult === 'object'
-                ? firstAutoResult.text
-                : firstAutoResult;
-            if (firstAutoText) {
-                Logger.info(`Auto-solving attempt 1/2: ${firstAutoText}`, null, contextToken);
-                try {
-                    if (!isBackground && !(await waitIfSessionPaused(token))) return;
-                    await submitCaptchaAndVerify(page, currentFrame, firstAutoText, contextToken);
-                    if (isBackground) return await performPortalScrape(page, contextToken);
-                    if (session) markTiming(session, 'captchaSolvedMs');
-                    return executeAsyncScrape(token, page);
-                } catch (error) {
-                    if (isIncorrectCaptchaError(error)) {
-                        allowSecondAttempt = true;
-                        queueStatisticsUpdate(effectiveUsername, { incorrectCaptchaCountAuto: 1 }, session || { deviceId: '', deviceModel: '' });
-                    } else {
-                        throw error;
-                    }
-                }
-            } else if (
-                firstAutoResult
-                && typeof firstAutoResult === 'object'
-                && firstAutoResult.provider === 'ollama'
-                && firstAutoResult.shouldRefreshCaptcha
-            ) {
-                allowSecondAttempt = true;
-                Logger.info('Ollama produced non-6-char output. Refreshing captcha for a new image instead of retrying same one.', null, contextToken);
-            }
-
-            if (allowSecondAttempt) {
                 if (!isBackground && !(await waitIfSessionPaused(token))) return;
-                const refreshedBuffer = await refreshCaptcha(page, currentFrame, contextToken);
-                if (refreshedBuffer) {
-                    currentCaptchaBuffer = refreshedBuffer;
-                    currentFrame = getActiveFrame(page, currentFrame) || currentFrame;
-                    const secondAutoResult = await solveCaptcha(currentCaptchaBuffer, contextToken, { isBackground });
-                    const secondAutoText = secondAutoResult && typeof secondAutoResult === 'object'
-                        ? secondAutoResult.text
-                        : secondAutoResult;
-                    if (secondAutoText) {
-                        Logger.info(`Auto-solving attempt 2/2: ${secondAutoText}`, null, contextToken);
-                        try {
-                            if (!isBackground && !(await waitIfSessionPaused(token))) return;
-                            await submitCaptchaAndVerify(page, currentFrame, secondAutoText, contextToken);
-                            if (isBackground) return await performPortalScrape(page, contextToken);
-                            if (session) markTiming(session, 'captchaSolvedMs');
-                            return executeAsyncScrape(token, page);
-                        } catch (innerError) {
-                            if (isIncorrectCaptchaError(innerError)) {
-                                queueStatisticsUpdate(effectiveUsername, { incorrectCaptchaCountAuto: 1 }, session || { deviceId: '', deviceModel: '' });
+                const firstAutoResult = await solveCaptcha(currentCaptchaBuffer, contextToken, { isBackground });
+                const firstAutoText = firstAutoResult && typeof firstAutoResult === 'object'
+                    ? firstAutoResult.text
+                    : firstAutoResult;
+                if (firstAutoText) {
+                    Logger.info(`Auto-solving attempt 1/2: ${firstAutoText}`, null, contextToken);
+                    try {
+                        if (!isBackground && !(await waitIfSessionPaused(token))) return;
+                        await submitCaptchaAndVerify(page, currentFrame, firstAutoText, contextToken);
+                        if (isBackground) return await performPortalScrape(page, contextToken);
+                        if (session) markTiming(session, 'captchaSolvedMs');
+                        return executeAsyncScrape(token, page);
+                    } catch (error) {
+                        if (isIncorrectCaptchaError(error)) {
+                            allowSecondAttempt = true;
+                            queueStatisticsUpdate(effectiveUsername, { incorrectCaptchaCountAuto: 1 }, session || { deviceId: '', deviceModel: '' });
+                        } else {
+                            throw error;
+                        }
+                    }
+                } else if (
+                    firstAutoResult
+                    && typeof firstAutoResult === 'object'
+                    && firstAutoResult.provider === 'ollama'
+                    && firstAutoResult.shouldRefreshCaptcha
+                ) {
+                    allowSecondAttempt = true;
+                    Logger.info('Ollama produced non-6-char output. Refreshing captcha for a new image instead of retrying same one.', null, contextToken);
+                }
+
+                if (allowSecondAttempt) {
+                    if (!isBackground && !(await waitIfSessionPaused(token))) return;
+                    const refreshedBuffer = await refreshCaptcha(page, currentFrame, contextToken);
+                    if (refreshedBuffer) {
+                        currentCaptchaBuffer = refreshedBuffer;
+                        currentFrame = getActiveFrame(page, currentFrame) || currentFrame;
+                        const secondAutoResult = await solveCaptcha(currentCaptchaBuffer, contextToken, { isBackground });
+                        const secondAutoText = secondAutoResult && typeof secondAutoResult === 'object'
+                            ? secondAutoResult.text
+                            : secondAutoResult;
+                        if (secondAutoText) {
+                            Logger.info(`Auto-solving attempt 2/2: ${secondAutoText}`, null, contextToken);
+                            try {
+                                if (!isBackground && !(await waitIfSessionPaused(token))) return;
+                                await submitCaptchaAndVerify(page, currentFrame, secondAutoText, contextToken);
+                                if (isBackground) return await performPortalScrape(page, contextToken);
+                                if (session) markTiming(session, 'captchaSolvedMs');
+                                return executeAsyncScrape(token, page);
+                            } catch (innerError) {
+                                if (isIncorrectCaptchaError(innerError)) {
+                                    queueStatisticsUpdate(effectiveUsername, { incorrectCaptchaCountAuto: 1 }, session || { deviceId: '', deviceModel: '' });
+                                }
+                                throw innerError;
                             }
-                            throw innerError;
                         }
                     }
                 }
+            } catch (autoError) {
+                if (isBackground) throw autoError;
+                const message = safeString(autoError && autoError.message ? autoError.message : '', { maxLength: 220 });
+                Logger.warn(`Auto-captcha failed; switching to manual entry. Cause: ${message || 'unknown'}`, null, contextToken);
+                autoSolveFallbackMessage = message
+                    ? `Auto-solve failed (${message}). Please solve the captcha manually.`
+                    : 'Auto-solve failed. Please solve the captcha manually.';
             }
         }
 
@@ -1686,7 +1735,9 @@ async function unifiedIviewFlow(token, browser, page, {
 
         session.status = 'manual_captcha';
         session.captchaImage = `data:image/png;base64,${currentCaptchaBuffer.toString('base64')}`;
-        session.message = canAutoSolve ? 'Auto-solve failed. Please solve the captcha manually.' : 'Please solve the captcha manually.';
+        session.message = canAutoSolve
+            ? (autoSolveFallbackMessage || 'Auto-solve failed. Please solve the captcha manually.')
+            : 'Please solve the captcha manually.';
         notifySessionUpdated(token);
 
         if (!session.manualCaptchaCounted) {
