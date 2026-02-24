@@ -143,6 +143,11 @@ const scrapeStudentInfo = async (page) => {
             .trim()
             .replace(/\s+/g, ' ')
             .toLowerCase();
+        const isAverageGradeLabel = (value) => {
+            const text = normalizeText(value);
+            if (!text) return false;
+            return (text.includes('βαθμ') || text.includes('grade')) && !text.includes('ects');
+        };
 
         const parseNumericGrade = (value) => {
             const compact = (value || '').toString().trim().replace(/\s+/g, '').replace(',', '.');
@@ -196,7 +201,7 @@ const scrapeStudentInfo = async (page) => {
 
                 const metricLabel = normalizeText(cells[1] && cells[1].innerText);
                 if (!metricLabel) continue;
-                if ((!metricLabel.includes('βαθμ') && !metricLabel.includes('grade')) || metricLabel.includes('ects')) continue;
+                if (!isAverageGradeLabel(metricLabel)) continue;
 
                 const candidate = parseNumericGrade(cells[2] && cells[2].innerText);
                 if (candidate) {
@@ -212,24 +217,31 @@ const scrapeStudentInfo = async (page) => {
             const rows = Array.from(document.querySelectorAll('tr')).slice(0, 400);
             for (const row of rows) {
                 const rowText = normalizeText(row.innerText);
-                if ((!rowText.includes('βαθμ') && !rowText.includes('grade')) || rowText.includes('ects')) continue;
+                if (!isAverageGradeLabel(rowText)) continue;
 
                 const cells = Array.from(row.querySelectorAll('td, th'));
-                if (cells.length >= 3) {
-                    const fixedColCandidate = parseNumericGrade(cells[2] && cells[2].innerText);
-                    if (fixedColCandidate) {
-                        average = fixedColCandidate;
+                if (cells.length === 0) continue;
+
+                let metricLabelIndex = -1;
+                for (let i = 0; i < cells.length; i++) {
+                    if (isAverageGradeLabel(cells[i] && cells[i].innerText)) {
+                        metricLabelIndex = i;
                         break;
                     }
                 }
 
-                for (const cell of cells) {
-                    const looseCandidate = parseNumericGrade(cell && cell.innerText);
-                    if (looseCandidate) {
-                        average = looseCandidate;
-                        break;
+                // Only scan cells to the right of the matching label to avoid picking
+                // unrelated numbers (e.g. semester/order index "1").
+                if (metricLabelIndex !== -1) {
+                    for (let i = metricLabelIndex + 1; i < cells.length; i++) {
+                        const rightCandidate = parseNumericGrade(cells[i] && cells[i].innerText);
+                        if (rightCandidate) {
+                            average = rightCandidate;
+                            break;
+                        }
                     }
                 }
+
                 if (average) break;
             }
         }
