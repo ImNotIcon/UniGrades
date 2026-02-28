@@ -2655,7 +2655,8 @@ app.post('/api/statistics/app-open', async (req, res) => {
     queueStatisticsUpdate(username, {}, {
         ...params,
         appOpenOnlineDelta: countOnlineOpen ? 1 : 0,
-        appOpenOfflineDelta: offlineOpenDelta
+        appOpenOfflineDelta: offlineOpenDelta,
+        touchLastSeen: true
     });
 
 
