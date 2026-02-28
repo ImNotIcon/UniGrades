@@ -1347,6 +1347,19 @@ async function submitCaptchaAndVerify(page, captchaFrame, answer, token = null) 
 
     await inputField.type(answer);
 
+    // Remove any pre-existing error/success indicators from the DOM so
+    // the post-submit verification loop does not immediately pick up stale
+    // markers left over from a previous (auto-solve) attempt.
+    try {
+        await activeFrame.evaluate(() => {
+            const stale = document.querySelectorAll(
+                'img[src*="ErrorMessage"], img[src*="WD_M_ERROR"], '
+                + 'img[src*="SuccessMessage"], img[src*="WD_M_OK"], img[src*="WD_M_OKAY"]'
+            );
+            stale.forEach(el => el.remove());
+        });
+    } catch { /* frame may have navigated; safe to ignore */ }
+
     try {
         await submitButton.click();
     } catch {
@@ -1728,10 +1741,27 @@ async function unifiedIviewFlow(token, browser, page, {
                 autoSolveFallbackMessage = message
                     ? `Auto-solve failed (${message}). Please solve the captcha manually.`
                     : 'Auto-solve failed. Please solve the captcha manually.';
+
+                // After failed auto-solve, the portal may have rotated the captcha
+                // and/or left error overlays in the frame.  Refresh to get a known-
+                // good image that matches the server-side challenge.
+                try {
+                    const postFailFrame = getActiveFrame(page, currentFrame) || currentFrame;
+                    const freshBuffer = await refreshCaptcha(page, postFailFrame, contextToken);
+                    if (freshBuffer) {
+                        currentCaptchaBuffer = freshBuffer;
+                        currentFrame = getActiveFrame(page, postFailFrame) || postFailFrame;
+                    }
+                } catch (refreshErr) {
+                    Logger.warn(`Post-auto-solve captcha refresh failed: ${refreshErr.message}`, null, contextToken);
+                }
             }
         }
 
         if (isBackground) throw new Error('Auto-captcha failed in background mode.');
+
+        // Keep session frame reference in sync with the potentially-navigated frame.
+        session.captchaFrame = getActiveFrame(page, currentFrame) || currentFrame;
 
         session.status = 'manual_captcha';
         session.captchaImage = `data:image/png;base64,${currentCaptchaBuffer.toString('base64')}`;
