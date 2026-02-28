@@ -367,7 +367,9 @@ function isIncorrectCaptchaError(error) {
 
 function isExpiredPushSubscriptionError(error) {
     const statusCode = error && typeof error.statusCode === 'number' ? error.statusCode : 0;
-    return statusCode === 404 || statusCode === 410;
+    if (statusCode === 404 || statusCode === 410 || statusCode === 401 || statusCode === 403) return true;
+    const msg = error && typeof error.message === 'string' ? error.message : '';
+    return msg.includes('Received unexpected response code');
 }
 
 function buildGradeIdentity(grade) {
