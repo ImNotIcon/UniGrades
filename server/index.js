@@ -1240,8 +1240,7 @@ async function navigateToIview(page, token) {
 
     for (let attempt = 0; attempt < 2; attempt++) {
         try {
-            await page.goto(ACADEMIC_IVIEW_URL, { timeout: 5000 });
-            await page.waitForSelector('body', { timeout: 5000 });
+            await page.goto(ACADEMIC_IVIEW_URL, { waitUntil: 'domcontentloaded', timeout: 5000 });
             return;
         } catch (error) {
             Logger.warn(`iView navigation attempt ${attempt + 1} failed: ${error.message}`, null, token);
@@ -1386,54 +1385,64 @@ async function submitCaptchaAndVerify(page, captchaFrame, answer, token = null) 
         return null;
     };
 
-    const waitForVerification = async (frame, timeout) => {
-        const handle = await frame.waitForFunction(
-            readResultInDocument,
-            { timeout, polling: 90 }
-        );
-        return handle.jsonValue();
-    };
+    // Race both the frame-level and page-level checks in parallel.
+    // On success the SAP portal often updates/navigates the frame, so the
+    // success indicator may appear at the page level (or in a different frame)
+    // rather than the original captcha frame.  Running both simultaneously
+    // prevents the old sequential 7 s frame-timeout before the fast page
+    // check even started.
+    const waitForVerificationInFrame = (frame, timeout) =>
+        frame.waitForFunction(readResultInDocument, { timeout, polling: 80 })
+            .then(h => h.jsonValue())
+            .catch(err => {
+                const msg = safeString(err && err.message ? err.message : '', { maxLength: 300 }).toLowerCase();
+                if (msg.includes('timeout') || msg.includes('context') || msg.includes('detach')) return null;
+                throw err;
+            });
+
+    const waitForVerificationInPage = (timeout) =>
+        page.waitForFunction(() => {
+            const checkDoc = (doc) => {
+                const body = doc.body;
+                const text = body ? body.innerText : '';
+                const textUpper = text.toUpperCase();
+                const okIcon = doc.querySelector('img[src*="SuccessMessage"], img[src*="WD_M_OK"], img[src*="WD_M_OKAY"]');
+                const errIcon = doc.querySelector('img[src*="ErrorMessage"], img[src*="WD_M_ERROR"]');
+                const gradesTable = doc.querySelector('table[id*="GRADES"], table[id*="GRADE"], .urST');
+                const hasSuccessText = textUpper.includes('OK!') || textUpper.includes('ΟΚ!') || /\bOK\b/.test(textUpper);
+                const hasErrorText = textUpper.includes('ERROR') || textUpper.includes('ΛΑΘ') || textUpper.includes('INCORRECT CAPTCHA');
+
+                if (okIcon || hasSuccessText || gradesTable) return 'SUCCESS';
+                if (errIcon || hasErrorText) return 'ERROR';
+                return null;
+            };
+
+            const mainStatus = checkDoc(document);
+            if (mainStatus) return mainStatus;
+
+            for (let i = 0; i < window.frames.length; i++) {
+                try {
+                    const frameStatus = checkDoc(window.frames[i].document);
+                    if (frameStatus) return frameStatus;
+                } catch {
+                    // cross-origin frame, ignore
+                }
+            }
+            return null;
+        }, { timeout, polling: 80 }).then(h => h.jsonValue())
+            .catch(err => {
+                const msg = safeString(err && err.message ? err.message : '', { maxLength: 300 }).toLowerCase();
+                if (msg.includes('timeout')) return null;
+                throw err;
+            });
 
     let result = null;
     try {
-        try {
-            result = await waitForVerification(activeFrame, 7000);
-        } catch (error) {
-            const message = safeString(error && error.message ? error.message : '', { maxLength: 300 }).toLowerCase();
-            if (!message.includes('timeout')) throw error;
-        }
-
-        if (!result) {
-            result = await page.waitForFunction(() => {
-                const checkDoc = (doc) => {
-                    const body = doc.body;
-                    const text = body ? body.innerText : '';
-                    const textUpper = text.toUpperCase();
-                    const okIcon = doc.querySelector('img[src*="SuccessMessage"], img[src*="WD_M_OK"], img[src*="WD_M_OKAY"]');
-                    const errIcon = doc.querySelector('img[src*="ErrorMessage"], img[src*="WD_M_ERROR"]');
-                    const gradesTable = doc.querySelector('table[id*="GRADES"], table[id*="GRADE"], .urST');
-                    const hasSuccessText = textUpper.includes('OK!') || textUpper.includes('ΟΚ!') || /\bOK\b/.test(textUpper);
-                    const hasErrorText = textUpper.includes('ERROR') || textUpper.includes('ΛΑΘ') || textUpper.includes('INCORRECT CAPTCHA');
-
-                    if (okIcon || hasSuccessText || gradesTable) return 'SUCCESS';
-                    if (errIcon || hasErrorText) return 'ERROR';
-                    return null;
-                };
-
-                const mainStatus = checkDoc(document);
-                if (mainStatus) return mainStatus;
-
-                for (let i = 0; i < window.frames.length; i++) {
-                    try {
-                        const frameStatus = checkDoc(window.frames[i].document);
-                        if (frameStatus) return frameStatus;
-                    } catch {
-                        // cross-origin frame, ignore
-                    }
-                }
-                return null;
-            }, { timeout: 5000, polling: 120 }).then(h => h.jsonValue());
-        }
+        const VERIFY_TIMEOUT = 7000;
+        result = await Promise.race([
+            waitForVerificationInFrame(activeFrame, VERIFY_TIMEOUT),
+            waitForVerificationInPage(VERIFY_TIMEOUT)
+        ]);
 
         if (result === 'SUCCESS') {
             Logger.info('Verification Success!', null, token);
