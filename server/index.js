@@ -1522,17 +1522,18 @@ async function authenticatePortalLogin(page, username, password, token) {
  * Encapsulated scraping with retry logic.
  */
 async function performPortalScrape(page, token) {
+    const hasSession = token && SESSIONS.has(token);
     let result;
     const retryDelays = [900, 1800];
     for (let attempt = 0; attempt < 3; attempt++) {
-        if (token && !(await waitIfSessionPaused(token))) return null;
+        if (hasSession && !(await waitIfSessionPaused(token))) return null;
         result = await scrapeGrades(page, token);
         if (result && Array.isArray(result.grades) && result.grades.length > 0) break;
         const waitMs = retryDelays[Math.min(attempt, retryDelays.length - 1)];
         await page.waitForFunction(() => document.querySelector('table, .urST, iframe'), { timeout: waitMs }).catch(() => { });
     }
 
-    if (token && !(await waitIfSessionPaused(token))) return null;
+    if (hasSession && !(await waitIfSessionPaused(token))) return null;
     if (!result || !Array.isArray(result.grades)) {
         result = await scrapeGrades(page, token);
     }
