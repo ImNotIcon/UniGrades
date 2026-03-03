@@ -33,7 +33,7 @@ function saveOllamaDebugCrop(buffer, stage, token) {
         if (!fs.existsSync(screenshotsDir)) fs.mkdirSync(screenshotsDir, { recursive: true });
 
         const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-        const tokenSafe = (token || "no-token").toString().slice(0, 8).replace(/[^a-zA-Z0-9_-]/g, "_");
+        const tokenSafe = (token || "no-token").toString().slice(0, 9).replace(/[^a-zA-Z0-9_-]/g, "_");
         const filename = `${timestamp}_${tokenSafe}_ollama_${stage}.png`;
         const fullPath = path.join(screenshotsDir, filename);
         fs.writeFileSync(fullPath, buffer);

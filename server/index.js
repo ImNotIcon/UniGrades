@@ -26,7 +26,11 @@ app.use(bodyParser.json({ limit: '2mb' }));
 class Logger {
     static getContext(req, token) {
         const ip = req ? (req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown').replace('::ffff:', '') : 'system';
-        const session = token ? token.substring(0, 8) : 'server';
+        const tokenValue = token ? String(token) : '';
+        const isSessionToken = !!tokenValue && SESSIONS.has(tokenValue);
+        const session = tokenValue
+            ? (isSessionToken ? tokenValue.substring(0, 9) : tokenValue)
+            : 'server';
         const timestamp = new Date().toISOString().replace('T', ' ').split('.')[0];
         return `[${timestamp}] [${ip}] [${session}]`;
     }
@@ -206,7 +210,7 @@ async function enqueueUserTask(username, taskFn, { token = '' } = {}) {
     const shouldBypassPaused = !!(activeToken && activeToken !== token && activeSession && activeSession.paused);
 
     if (shouldBypassPaused) {
-        Logger.info(`Bypassing paused session ${activeToken.slice(0, 8)} for newer session ${token.slice(0, 8)}.`, null, username);
+        Logger.info(`Bypassing paused session ${activeToken.slice(0, 9)} for newer session ${token.slice(0, 9)}.`, null, username);
     }
 
     const base = shouldBypassPaused ? Promise.resolve() : previous;
@@ -2059,6 +2063,7 @@ async function runBackgroundChecks() {
 
         for (const doc of docs) {
             try {
+                Logger.info(`Background check running for user: ${doc?._id || 'unknown'}.`, null, doc?._id || '');
                 await runBackgroundCheckForUser(doc);
             } catch (error) {
                 Logger.error(`Background check user-level error: ${error.message}`);
