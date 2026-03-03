@@ -273,6 +273,19 @@ function getOllamaGenerateUrl() {
     return `${baseUrl.replace(/\/+$/, "")}/${generatePath.replace(/^\/+/, "")}`;
 }
 
+function buildOllamaOptions() {
+    const extraOptions = parseJsonObject(process.env.OLLAMA_OPTIONS_JSON);
+    const numCtx = parsePositiveInt(process.env.OLLAMA_NUM_CTX, null);
+    const numPredict = parsePositiveInt(process.env.OLLAMA_NUM_PREDICT, null);
+    const temperature = parseNumber(process.env.OLLAMA_TEMPERATURE, 0);
+
+    const options = { ...extraOptions };
+    if (numCtx !== null) options.num_ctx = numCtx;
+    if (numPredict !== null) options.num_predict = numPredict;
+    if (Number.isFinite(temperature)) options.temperature = temperature;
+    return options;
+}
+
 async function solveWithGemini(imageBuffer, token) {
     if (!isGeminiConfigured()) {
         return { provider: "gemini", text: null, hadError: false, shouldRefreshCaptcha: false };
@@ -349,15 +362,7 @@ async function solveWithOllama(imageBuffer, token) {
     const model = safeString(process.env.OLLAMA_MODEL);
     const prompt = safeString(process.env.OLLAMA_PROMPT) || DEFAULT_OLLAMA_PROMPT;
     const timeoutMs = parsePositiveInt(process.env.OLLAMA_TIMEOUT_MS, 30000);
-    const extraOptions = parseJsonObject(process.env.OLLAMA_OPTIONS_JSON);
-    const numCtx = parsePositiveInt(process.env.OLLAMA_NUM_CTX, null);
-    const numPredict = parsePositiveInt(process.env.OLLAMA_NUM_PREDICT, null);
-    const temperature = parseNumber(process.env.OLLAMA_TEMPERATURE, 0);
-
-    const baseOptions = { ...extraOptions };
-    if (numCtx !== null) baseOptions.num_ctx = numCtx;
-    if (numPredict !== null) baseOptions.num_predict = numPredict;
-    if (Number.isFinite(temperature)) baseOptions.temperature = temperature;
+    const baseOptions = buildOllamaOptions();
 
     const ollamaImageBuffer = cropCaptchaForOllama(imageBuffer, token);
     const imageBase64 = ollamaImageBuffer.toString("base64");
@@ -424,9 +429,9 @@ async function warmupOllamaModel(token = "startup") {
 
     const url = getOllamaGenerateUrl();
     const model = safeString(process.env.OLLAMA_MODEL);
+    const prompt = safeString(process.env.OLLAMA_PROMPT) || DEFAULT_OLLAMA_PROMPT;
+    const baseOptions = buildOllamaOptions();
     const timeoutMs = parsePositiveInt(process.env.OLLAMA_WARMUP_TIMEOUT_MS, 90000);
-    const keepAlive = safeString(process.env.OLLAMA_KEEP_ALIVE) || "-1";
-    const prompt = safeString(process.env.OLLAMA_WARMUP_PROMPT) || "Warmup request. Reply OK.";
 
     Logger.info(`[Captcha] Sending Ollama warmup request for model '${model}'...`, null, token);
 
@@ -441,11 +446,7 @@ async function warmupOllamaModel(token = "startup") {
                 model,
                 prompt,
                 stream: false,
-                keep_alive: keepAlive,
-                options: {
-                    num_predict: 1,
-                    temperature: 0
-                }
+                options: baseOptions
             }),
             signal: controller.signal
         });
