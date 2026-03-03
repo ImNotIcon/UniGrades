@@ -9,7 +9,12 @@ const webpush = require('web-push');
 const { MongoClient } = require('mongodb');
 
 const { scrapeGrades } = require('./scraper');
-const { solveCaptcha, isAutoSolveConfigured } = require('./captcha_solver');
+const {
+    solveCaptcha,
+    warmupOllamaModel,
+    isAutoSolveConfigured,
+    isOllamaConfigured
+} = require('./captcha_solver');
 
 const app = express();
 app.use(cors());
@@ -2674,6 +2679,10 @@ app.post('/api/statistics/app-open', async (req, res) => {
 
 app.listen(PORT, '0.0.0.0', async () => {
     await initMongo();
+    const autoSolveGloballyEnabled = process.env.DISABLE_AUTO_CAPTCHA !== 'true';
+    if (autoSolveGloballyEnabled && isOllamaConfigured()) {
+        await warmupOllamaModel('startup');
+    }
     Logger.info(`Server running on 0.0.0.0:${PORT}`);
 });
 

@@ -414,6 +414,63 @@ async function solveWithOllama(imageBuffer, token) {
     }
 }
 
+async function warmupOllamaModel(token = "startup") {
+    if (!isOllamaConfigured()) return false;
+
+    if (typeof fetch !== "function") {
+        Logger.warn("[Captcha] Skipping Ollama warmup because global fetch is unavailable.", null, token);
+        return false;
+    }
+
+    const url = getOllamaGenerateUrl();
+    const model = safeString(process.env.OLLAMA_MODEL);
+    const timeoutMs = parsePositiveInt(process.env.OLLAMA_WARMUP_TIMEOUT_MS, 90000);
+    const keepAlive = safeString(process.env.OLLAMA_KEEP_ALIVE) || "-1";
+    const prompt = safeString(process.env.OLLAMA_WARMUP_PROMPT) || "Warmup request. Reply OK.";
+
+    Logger.info(`[Captcha] Sending Ollama warmup request for model '${model}'...`, null, token);
+
+    const controller = new AbortController();
+    const timeoutHandle = setTimeout(() => controller.abort(), timeoutMs);
+
+    try {
+        const response = await fetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                model,
+                prompt,
+                stream: false,
+                keep_alive: keepAlive,
+                options: {
+                    num_predict: 1,
+                    temperature: 0
+                }
+            }),
+            signal: controller.signal
+        });
+
+        if (!response.ok) {
+            const bodyText = await response.text().catch(() => "");
+            throw new Error(`HTTP ${response.status}${bodyText ? ` - ${bodyText.slice(0, 300)}` : ""}`);
+        }
+
+        await response.json().catch(() => null);
+        Logger.info(`[Captcha] Ollama warmup completed for model '${model}'.`, null, token);
+        return true;
+    } catch (error) {
+        const message = getErrorMessage(error);
+        if (message.includes("AbortError")) {
+            Logger.warn(`[Captcha] Ollama warmup timed out after ${timeoutMs}ms.`, null, token);
+        } else {
+            Logger.warn(`[Captcha] Ollama warmup failed: ${message}`, null, token);
+        }
+        return false;
+    } finally {
+        clearTimeout(timeoutHandle);
+    }
+}
+
 async function solveCaptcha(imageBuffer, token, options = {}) {
     const useSubscriptionFlow = options.channel === "subscription" || options.isBackground === true;
     const hasGemini = isGeminiConfigured();
@@ -458,6 +515,7 @@ async function solveCaptcha(imageBuffer, token, options = {}) {
 
 module.exports = {
     solveCaptcha,
+    warmupOllamaModel,
     isGeminiConfigured,
     isOllamaConfigured,
     isAutoSolveConfigured
