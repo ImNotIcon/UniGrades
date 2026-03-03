@@ -21,9 +21,35 @@ registerRoute(navigationRoute)
 
 // Handle push notifications
 self.addEventListener('push', (event) => {
-    if (!event.data) return
+    let data: {
+        title?: string
+        body?: string
+        icon?: string
+        badge?: string
+        tag?: string
+        data?: { url?: string }
+    } = {}
 
-    const data = event.data.json()
+    if (event.data) {
+        try {
+            data = event.data.json()
+        } catch {
+            // Some platforms may deliver non-JSON payloads. Fallback to text.
+            const text = event.data.text()
+            data = {
+                title: 'UniGrades',
+                body: text || 'You have a new notification',
+                data: { url: '/' },
+            }
+        }
+    } else {
+        // Keep a visible fallback even if payload is missing.
+        data = {
+            title: 'UniGrades',
+            body: 'You have a new notification',
+            data: { url: '/' },
+        }
+    }
 
     const options = {
         body: data.body || 'You have a new notification',
