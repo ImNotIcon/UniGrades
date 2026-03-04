@@ -4,7 +4,7 @@ const fs = require("fs");
 const path = require("path");
 
 const DEFAULT_GEMINI_MODELS = ["gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-3-flash-preview"];
-const DEFAULT_GEMINI_PROMPT = "Extract the 6-character alphanumeric captcha text from this image. Return ONLY the 6 characters. No spaces.";
+const DEFAULT_GEMINI_PROMPT = "Extract the 6 letter captcha text from this image. Return ONLY the 6 letters. No spaces.";
 const DEFAULT_OLLAMA_PROMPT = "Return exactly the 6 letters. No explanation. No spaces.";
 const OLLAMA_CROP_BORDER_SHAVE = 3;
 const OLLAMA_ADAPTIVE_BLOCK_SIZE = 11;
